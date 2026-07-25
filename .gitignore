@@ -5,3 +5,5 @@ native/systemaudio
 *.log
 .DS_Store
 cue-data.json
+CLAUDE.md
+.claude/

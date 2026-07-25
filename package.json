@@ -52,12 +52,12 @@
     "macos"
   ],
   "devDependencies": {
-    "electron": "33.2.1",
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@google/genai": "^0.3.0",
+    "electron": "^43.2.0",
     "lucide-static": "^0.468.0",
     "openai": "^4.73.0"
   }
