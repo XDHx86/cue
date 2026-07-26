@@ -64,7 +64,12 @@ function createWindow() {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     if (typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
   } else {
-    win.setAlwaysOnTop(true);
+    // Windows: the default setAlwaysOnTop(true) level sits below Zoom's share overlay (and
+    // other 'screen-saver'-level overlays), so cue vanishes the moment a call starts sharing.
+    // Match macOS: raise to 'screen-saver',1 and span all workspaces so an overlay on a
+    // fullscreen app can't hide the panel. (setHiddenInMissionControl is darwin-only.)
+    win.setAlwaysOnTop(true, 'screen-saver', 1);
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -289,8 +294,15 @@ app.whenReady().then(() => {
   // audio so the renderer can capture what's playing (Zoom/Meet) using cue's own grant.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      if (sources.length) callback({ video: sources[0], audio: 'loopback' });
-      else callback();
+      if (sources.length) {
+        // Pick the source belonging to the primary display rather than always sources[0],
+        // which on multi-monitor setups can hand back a secondary screen's loopback and
+        // leave cue listening to the wrong display's audio. display_id is a string; on
+        // Windows it can be empty for some sources, so fall back to sources[0].
+        const primaryId = String(screen.getPrimaryDisplay().id);
+        const primary = sources.find((s) => String(s.display_id) === primaryId) || sources[0];
+        callback({ video: primary, audio: 'loopback' });
+      } else callback();
     }).catch(() => callback());
   }, { useSystemPicker: false });
 
