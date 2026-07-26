@@ -1,6 +1,11 @@
 const DEBUG = false; // Set to false to disable debug logging
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell } = require('electron');
 const path = require('path');
+const { loadDotenv } = require('./src/env');
+// Populate process.env from .env (CUE_ENV_PATH → userData/.env → cwd/.env) BEFORE the store
+// require, so store.load()'s CUE_* override pass sees the env-supplied values. No-op if no
+// .env exists; shell-set vars always win.
+loadDotenv();
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');

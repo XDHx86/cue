@@ -5,6 +5,8 @@ native/systemaudio
 *.log
 .DS_Store
 cue-data.json
+.env
+!.env.example
 CLAUDE.md
 .claude/
 .codegraph/
