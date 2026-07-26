@@ -150,6 +150,21 @@ async function runFeature(mode, userText) {
     return;
   }
   state.busy = true;
+  // 30s idle watchdog: if the SDK stream stops emitting tokens for 30s, treat it as
+  // hung — unblock state.busy and tell the renderer to give up instead of spinning
+  // forever (the `finally` below only runs on resolve/reject, which a hung stream never does).
+  let watchdog = null;
+  let dead = false;
+  function disarmWatchdog() { if (watchdog) { clearTimeout(watchdog); watchdog = null; } }
+  function onWatchdog() {
+    if (dead) return;
+    dead = true; // late tokens from the dying stream now no-op
+    if (DEBUG) console.log('[DEBUG MAIN] stream idle watchdog: no tokens for 30s, releasing.');
+    send('llm:error', { message: 'Stream timed out — no response tokens received for 30s.' });
+    send('llm:done', {});
+    state.busy = false; // release main's latch without waiting for the hung stream to settle
+  }
+  function armWatchdog() { disarmWatchdog(); watchdog = setTimeout(onWatchdog, 30000); }
   try {
     const settings = store.getSettings();
     const llm = createLLM(settings);
@@ -178,17 +193,21 @@ async function runFeature(mode, userText) {
 
     const built = def.build({ transcript, userText: userText || '' });
     if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
+    armWatchdog();
     const fullText = await llm.stream({
       system: appendResumeContext(def.system, settings.resumeContext),
       turns: [{ role: 'user', text: built }],
       imageDataUrl,
-      onToken: (t) => send('llm:token', { text: t })
+      onToken: (t) => { armWatchdog(); send('llm:token', { text: t }); }
     });
+    disarmWatchdog();
     if (DEBUG) console.log('[DEBUG MAIN] Full LLM Output:\n', fullText);
-    send('llm:done', {});
+    if (!dead) send('llm:done', {});
   } catch (e) {
-    send('llm:error', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
+    disarmWatchdog();
+    if (!dead) send('llm:error', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
   } finally {
+    disarmWatchdog();
     state.busy = false;
   }
 }
