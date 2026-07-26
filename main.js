@@ -13,6 +13,7 @@ const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
 const { appendResumeContext } = require('./src/profile-context');
 const { transcriptState, pushFinal, getFinals } = require('./src/transcript');
+const { normalizeSDKError, userMessage } = require('./src/errors');
 const { rms16 } = require('./src/wav');
 
 let win = null;
@@ -120,14 +121,15 @@ async function flushChannel(channel) {
 }
 
 function handleSttError(err, settings) {
-  console.log('[stt] error', err.provider, err.status, err.code, err.message);
+  const ne = normalizeSDKError(err, err && err.provider);
+  console.log('[stt] error', ne.provider, ne.status, ne.code, ne.message);
   if (sttDisabled) return;
-  const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found';
-  sttDisabled = true; // stop hammering the API every few seconds
+  const noAccess = ne.status === 401 || ne.status === 403 || ne.code === 'model_not_found';
+  sttDisabled = true; // stop hammering the API every few seconds; reset on settings:set (main.js L198)
   if (noAccess) {
-    send('status', { message: 'Transcription off: your ' + err.provider + ' key has no access to a speech-to-text model (403). Screen + LeetCode still work. To enable listening: give the key Whisper/transcription access, or add a Gemini key in Settings and reopen.' });
+    send('status', { message: 'Transcription off: your ' + ne.provider + ' key has no access to a speech-to-text model. ' + ne.suggestion + ' Screen + LeetCode still work; fix the key and reopen Settings to re-enable listening.' });
   } else {
-    send('status', { message: 'Transcription error (' + err.provider + '): ' + err.message });
+    send('status', { message: 'Transcription error (' + ne.provider + '): ' + ne.suggestion });
   }
 }
 
@@ -218,7 +220,11 @@ async function runFeature(mode, userText) {
     if (!dead) send('llm:done', {});
   } catch (e) {
     disarmWatchdog();
-    if (!dead) send('llm:error', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
+    if (dead) return; // watchdog already reported the timeout
+    // Errors from streamX are already normalized by llm.js; normalize bare throws too so the
+    // user always gets a provider-specific suggestion instead of a raw SDK envelope.
+    const ne = e && e.suggestion ? e : normalizeSDKError(e, settings.provider);
+    send('llm:error', { message: userMessage(ne) });
   } finally {
     disarmWatchdog();
     state.busy = false;

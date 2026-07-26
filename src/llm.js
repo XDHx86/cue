@@ -2,12 +2,14 @@ const DEBUG = false; // Set to false to disable debug logging
 // LLM factory — OpenAI / Anthropic / Gemini behind one streaming interface.
 // stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
 
+const { normalizeSDKError } = require('./errors');
+
 function stripDataUrl(dataUrl) {
   const m = /^data:(.+?);base64,(.*)$/s.exec(dataUrl || '');
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, baseURL }) {
+async function streamOpenAI({ apiKey, model, provider, system, turns, imageDataUrl, maxTokens, onToken, baseURL }) {
   if (DEBUG) console.log('[DEBUG LLM] streamOpenAI called', { model, baseURL, hasImage: !!imageDataUrl, maxTokens });
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey, baseURL });
@@ -35,11 +37,11 @@ async function streamOpenAI({ apiKey, model, system, turns, imageDataUrl, maxTok
     return full;
   } catch (err) {
     if (DEBUG) console.error('[DEBUG LLM] streamOpenAI error:', err);
-    throw err;
+    throw normalizeSDKError(err, provider || 'openai');
   }
 }
 
-async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamAnthropic({ apiKey, model, provider, system, turns, imageDataUrl, maxTokens, onToken }) {
   if (DEBUG) console.log('[DEBUG LLM] streamAnthropic called', { model, hasImage: !!imageDataUrl, maxTokens });
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
@@ -65,11 +67,11 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
     return full;
   } catch (err) {
     if (DEBUG) console.error('[DEBUG LLM] streamAnthropic error:', err);
-    throw err;
+    throw normalizeSDKError(err, provider || 'anthropic');
   }
 }
 
-async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamGemini({ apiKey, model, provider, system, turns, imageDataUrl, maxTokens, onToken }) {
   if (DEBUG) console.log('[DEBUG LLM] streamGemini called', { model, hasImage: !!imageDataUrl, maxTokens });
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
@@ -100,7 +102,7 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
     return full;
   } catch (err) {
     if (DEBUG) console.error('[DEBUG LLM] streamGemini error:', err);
-    throw err;
+    throw normalizeSDKError(err, provider || 'gemini');
   }
 }
 
@@ -122,7 +124,7 @@ function createLLM(settings) {
     ready: !!apiKey && !!model,
     async stream(params) {
       if (DEBUG) console.log('[DEBUG LLM] stream() invoked for provider:', provider);
-      const args = { apiKey, model, maxTokens, ...params };
+      const args = { apiKey, model, provider, maxTokens, ...params };
       if (provider === 'openai') return streamOpenAI(args);
       if (provider === 'nvidia') return streamOpenAI({ ...args, baseURL: 'https://integrate.api.nvidia.com/v1' });
       if (provider === 'anthropic') return streamAnthropic(args);
