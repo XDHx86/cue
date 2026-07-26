@@ -24,6 +24,10 @@
   let busy = false;
   let aiEl = null;       // current streaming <div class="ai-text">
   let caretEl = null;
+  let wordSpan = null;   // single <span class="w"> that grows with the stream (was one <span> per token)
+  let pendingText = ''; // tokens buffered since the last rAF flush
+  let rafPending = false;
+  let rafId = 0;
   let assistShortcut = DEFAULT_ASSIST_SHORTCUT;
   let recordingShortcut = false;
 
@@ -79,7 +83,7 @@
     return html;
   }
 
-  function clearMessages() { messages.innerHTML = ''; aiEl = null; caretEl = null; }
+  function clearMessages() { messages.innerHTML = ''; resetFlush(); aiEl = null; caretEl = null; }
 
   function addUserBubble(text) {
     const b = document.createElement('div');
@@ -89,6 +93,7 @@
   }
 
   function startAi(small) {
+    resetFlush();
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
     aiEl.dataset.raw = '';
@@ -98,19 +103,43 @@
     messages.appendChild(aiEl);
   }
 
+  // Discard any in-flight rAF and buffered text; called when a stream ends or is replaced.
+  function resetFlush() {
+    if (rafPending) { cancelAnimationFrame(rafId); rafPending = false; }
+    pendingText = '';
+    wordSpan = null;
+  }
+
   function appendToken(t) {
     if (!aiEl) startAi(false);
     aiEl.dataset.raw += t;
-    const span = document.createElement('span');
-    span.className = 'w';
-    span.textContent = t;
-    aiEl.insertBefore(span, caretEl);
+    pendingText += t;
+    if (!rafPending) {
+      rafPending = true;
+      rafId = requestAnimationFrame(flushTokens);
+    }
+  }
+
+  // One DOM write per frame, regardless of how many tokens arrived — was one <span> per token.
+  function flushTokens() {
+    rafPending = false;
+    if (!aiEl || !pendingText) return;
+    if (wordSpan) {
+      wordSpan.textContent += pendingText;
+    } else {
+      wordSpan = document.createElement('span');
+      wordSpan.className = 'w';
+      wordSpan.textContent = pendingText;
+      aiEl.insertBefore(wordSpan, caretEl);
+    }
+    pendingText = '';
   }
 
   function finalizeAi() {
     if (!aiEl) return;
     const raw = aiEl.dataset.raw || '';
     aiEl.innerHTML = renderMarkdown(raw);
+    resetFlush();
     aiEl = null; caretEl = null;
   }
 
