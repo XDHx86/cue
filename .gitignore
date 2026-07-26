@@ -7,3 +7,5 @@ native/systemaudio
 cue-data.json
 CLAUDE.md
 .claude/
+.codegraph/
+.mcp.json
