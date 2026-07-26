@@ -7,6 +7,7 @@ const { createSTT } = require('./src/stt');
 const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
 const { appendResumeContext } = require('./src/profile-context');
+const { transcriptState, pushFinal, getFinals } = require('./src/transcript');
 const { rms16 } = require('./src/wav');
 
 let win = null;
@@ -22,7 +23,9 @@ const RESERVED_SHORTCUTS = new Set([
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
-const transcript = []; // { channel, text, ts }
+// transcript is now a ring-buffered transcriptState (src/transcript.js): finals capped at
+// TR_MAX_TURNS, plus live partials and a summary watermark. The lone read site (runFeature's
+// def.build) consumes getFinals(); the flush loop pushes finals via pushFinal().
 const FLUSH_MS = 3500;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.6); // ~0.6s
 const RMS_GATE = 240;
@@ -95,7 +98,7 @@ async function flushChannel(channel) {
     }
     if (res.text && res.text.trim()) {
       const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      transcript.push(turn);
+      pushFinal(turn);
       if (DEBUG) console.log(`[TRANSCRIPT] ${channel === 'you' ? 'You' : 'Them'}:`, turn.text);
       send('transcript', turn);
     }
@@ -191,7 +194,7 @@ async function runFeature(mode, userText) {
       }
     }
 
-    const built = def.build({ transcript, userText: userText || '' });
+    const built = def.build({ transcript: getFinals(), userText: userText || '' });
     if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
     armWatchdog();
     const fullText = await llm.stream({
