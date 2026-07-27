@@ -22,6 +22,7 @@
   // ---- state -------------------------------------------------------------
   let settings = null;
   let busy = false;
+  let capturing = false;
   let aiEl = null;       // current streaming <div class="ai-text">
   let caretEl = null;
   let wordSpan = null;   // single <span class="w"> that grows with the stream (was one <span> per token)
@@ -263,9 +264,18 @@
 
   // ---- events from main --------------------------------------------------
   cue.on('capture:state', ({ active }) => {
+    capturing = active;
     $('#live-dot').classList.toggle('off', !active);
     $('#stop-btn').classList.toggle('active', active);
     if (active) { startMic(); startSystemAudio(); } else { stopMic(); stopSystemAudio(); }
+    if (!active) {
+      // Listening stopped: freeze the strip (turns stay for review) but drop live partials and
+      // the status badge — they're stale once the stream closes.
+      if (partialEls.you) { partialEls.you.remove(); partialEls.you = null; }
+      if (partialEls.them) { partialEls.them.remove(); partialEls.them = null; }
+      sttBadge.textContent = ''; sttBadge.className = 'stt-badge';
+    }
+    updateStripVisibility();
   });
   cue.on('llm:start', ({ userBubble, small }) => {
     clearMessages();
@@ -278,6 +288,52 @@
   cue.on('llm:error', ({ message }) => {
     if (!aiEl) startAi(true);
     aiEl.dataset.raw = message; finalizeAi(); setBusy(false);
+  });
+
+  // ---- live transcript strip (finals + partials from the streaming STT pipeline) ----
+  // The `transcript` channel was allowlisted since Phase 0a but never consumed; this is the
+  // consumer. Finals replace a channel's live partial cell (the ring buffer mirrors the same
+  // clear-on-final rule in transcriptState). text is always set via textContent (never innerHTML)
+  // so a provider-sourced transcript can't inject markup.
+  const strip = $('#transcript-strip');
+  const tlist = $('#transcript-list');
+  const sttBadge = $('#stt-badge');
+  const partialEls = { you: null, them: null };
+  const whoLabel = (ch) => (ch === 'you' ? 'You' : 'Them');
+  function scrollTlist() { tlist.scrollTop = tlist.scrollHeight; }
+  function updateStripVisibility() {
+    const hasTurns = !!tlist.querySelector('.turn');
+    strip.classList.toggle('empty', !hasTurns && !capturing);
+  }
+  function makeTurn(channel, text, partial) {
+    const el = document.createElement('div');
+    el.className = 'turn ' + channel + (partial ? ' partial' : '');
+    const who = document.createElement('span'); who.className = 'who'; who.textContent = whoLabel(channel);
+    const t = document.createElement('span'); t.className = 't'; t.textContent = text;
+    el.appendChild(who); el.appendChild(t);
+    return el;
+  }
+  cue.on('transcript', ({ channel, text }) => {
+    // A finalized turn replaces that channel's live partial cell, then becomes a real turn.
+    if (partialEls[channel]) { partialEls[channel].remove(); partialEls[channel] = null; }
+    tlist.appendChild(makeTurn(channel, text, false));
+    scrollTlist(); updateStripVisibility();
+  });
+  cue.on('transcript:partial', ({ channel, text }) => {
+    let el = partialEls[channel];
+    if (!el) { el = makeTurn(channel, text, true); tlist.appendChild(el); partialEls[channel] = el; }
+    else el.querySelector('.t').textContent = text;
+    scrollTlist(); updateStripVisibility();
+  });
+  cue.on('stt:status', ({ active, provider, reason }) => {
+    if (active) {
+      sttBadge.textContent = (provider === 'faster-whisper') ? 'streaming' : 'live';
+      sttBadge.className = 'stt-badge streaming';
+    } else {
+      const degraded = !!(reason && /batch/i.test(reason));
+      sttBadge.textContent = reason || 'inactive';
+      sttBadge.className = 'stt-badge ' + (degraded ? 'degraded' : 'inactive');
+    }
   });
   let statusTimer = null;
   function showStatus(message) {

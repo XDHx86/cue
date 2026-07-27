@@ -148,6 +148,36 @@ button:focus { outline: none; }
   color: #bcd4fb; font-size: 12.5px; line-height: 1.45; -webkit-user-select: text; user-select: text; }
 #cue-status.show { display: block; animation: fadeUp 200ms ease both; }
 
+/* ============================ Transcript strip ============================ */
+/* Live transcription of the two channels (you / them). Muted so the AI response below stays
+   the focus; distinct channel tints keep "who said what" visible. Hidden entirely until the
+   first turn arrives or listening starts. Partials render as an italic, dimmer live cell that a
+   final for the same channel replaces. */
+#transcript-strip { margin-bottom: 12px; }
+#transcript-strip.empty { display: none; }
+.ts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.ts-label { color: var(--tx-mut); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.stt-badge {
+  font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill);
+  background: rgba(255,255,255,0.06); color: var(--tx-mut); border: 1px solid rgba(255,255,255,0.10);
+}
+.stt-badge:empty { display: none; }
+.stt-badge.streaming { color: #7FB0F9; border-color: rgba(60,131,245,0.40); background: rgba(60,131,245,0.12); }
+.stt-badge.degraded { color: #E8B57A; border-color: rgba(232,181,122,0.40); background: rgba(232,181,122,0.10); }
+.stt-badge.inactive { color: #FF9D8F; border-color: rgba(255,157,143,0.40); background: rgba(255,157,143,0.10); }
+#transcript-list { max-height: 26vh; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; padding-right: 2px; }
+.turn {
+  display: flex; gap: 8px; font-size: 13px; line-height: 1.4; color: rgba(255,255,255,0.62);
+  animation: fadeUp 160ms ease both; -webkit-user-select: text; user-select: text;
+}
+.turn .who { flex: 0 0 38px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding-top: 2px; }
+.turn .t { flex: 1; word-break: break-word; }
+.turn.you .who { color: #7FB0F9; }
+.turn.them .who { color: #E8B57A; }
+.turn.partial { opacity: 0.65; }
+.turn.partial .t { font-style: italic; }
+.turn.partial .t::after { content: '…'; margin-left: 1px; opacity: 0.5; }
+
 /* ============================ Action row ============================ */
 #action-row {
   display: flex; align-items: center; flex-wrap: nowrap; gap: 4px;
