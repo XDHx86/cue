@@ -13,7 +13,7 @@ const { createStreamSTT } = require('./src/stt-stream');
 const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
 const { appendResumeContext } = require('./src/profile-context');
-const { transcriptState, pushFinal, getFinals, setPartial, clearPartial } = require('./src/transcript');
+const { pushFinal, setPartial, clearPartial, liveTranscriptForPrompt } = require('./src/transcript');
 const { normalizeSDKError, userMessage } = require('./src/errors');
 const { rms16 } = require('./src/wav');
 
@@ -23,7 +23,8 @@ let registeredAssistShortcut = null;
 const DEFAULT_ASSIST_SHORTCUT = 'CommandOrControl+Return';
 const RESERVED_SHORTCUTS = new Set([
   'commandorcontrol+h',
-  'commandorcontrol+shift+x'
+  'commandorcontrol+shift+x',
+  'control+alt+a' // immediate assist — always-on, not user-configurable (see registerShortcuts)
 ]);
 
 // -------- capture / transcript state --------
@@ -38,7 +39,8 @@ const buffers = { you: [], them: [] };
 const streamSessions = { you: null, them: null };
 // transcript is now a ring-buffered transcriptState (src/transcript.js): finals capped at
 // TR_MAX_TURNS, plus live partials and a summary watermark. The lone read site (runFeature's
-// def.build) consumes getFinals(); streaming finals are pushed via pushFinal(), batch finals too.
+// def.build) consumes liveTranscriptForPrompt() (finals + current partials); streaming finals
+// are pushed via pushFinal(), batch finals too.
 const FLUSH_MS = 3500;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.6); // ~0.6s
 const RMS_GATE = 240;
@@ -274,7 +276,10 @@ async function runFeature(mode, userText) {
       }
     }
 
-    const built = def.build({ transcript: getFinals(), userText: userText || '' });
+    // Compose the prompt from the finalized turns PLUS the live partials, so the assistant
+    // answers from what's being said right now (Ctrl+Alt+A mid-speech) — liveTranscriptForPrompt
+    // returns a snapshot clone, so a final arriving mid-build can't mutate the array we format.
+    const built = def.build({ transcript: liveTranscriptForPrompt(), userText: userText || '' });
     if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
     armWatchdog();
     const fullText = await llm.stream({
@@ -362,6 +367,11 @@ function setAssistShortcut(accelerator) {
 function registerShortcuts() {
   globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
   globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
+  // Immediate assist: answer from the live transcript (finals + current partials) without waiting
+  // for the speaker to finish. Not user-configurable — reserved so the configurable Assist can't
+  // collide. STT sessions are owned by setCapturing and never gated by state.busy, so requesting
+  // an answer never interrupts the ongoing transcription stream (ADR-008).
+  globalShortcut.register('Control+Alt+A', () => runFeature('assist', ''));
 
   const settings = store.getSettings();
   const configured = settings.shortcuts && settings.shortcuts.assist;

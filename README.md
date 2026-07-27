@@ -139,6 +139,7 @@ The setup — a reference Python server (with VAD endpoint detection) and the ex
 ## How to use it
 
 - **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere. Change this shortcut under **Settings → Keyboard shortcuts**.
+- **`Ctrl` `Alt` `A` — Immediate assist.** While listening, answer from the **live** transcript — including the incomplete sentence the other person is saying right now — without waiting for them to finish or pausing transcription. (On macOS that's `⌃` `⌥` `A`.) Not configurable; it's reserved distinct from the Assist shortcut above.
 - **`⌘` `H` — Solve what's on screen.** Screenshots a coding problem and returns the approach, code, and time/space complexity.
 - **The `▢` button** (top bar) — start/stop **listening** to a meeting. The green dot means it's live.
 - **Type a question** in the box and press `↵` to ask about your screen or conversation.
