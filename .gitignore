@@ -7,7 +7,7 @@ native/systemaudio
 cue-data.json
 .env
 !.env.example
-CLAUDE.md
-.claude/
+.claude/*
+!.claude/docs
 .codegraph/
 .mcp.json
