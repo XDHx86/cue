@@ -128,6 +128,14 @@ Prefer to keep everything on your machine? cue can talk to a **local [Ollama](ht
 
 ---
 
+## Faster transcription (optional: faster-whisper)
+
+By default cue transcribes in a few-second batch (OpenAI Whisper or Gemini), which has second-scale latency. For near-live transcription you can run a **local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) WebSocket server** and point cue at it: cue then streams PCM continuously, renders **partial** transcripts live, and finalizes each utterance on the server's VAD. Asking (`⌘` `↵`) answers from the *current* speaker state, mid-speech, without pausing capture.
+
+The setup — a reference Python server (with VAD endpoint detection) and the exact wire protocol cue speaks — is in [docs/faster-whisper-setup.md](docs/faster-whisper-setup.md). Point cue at it in **Settings** (STT provider → `faster-whisper`, endpoint `ws://localhost:9080/stream`) or via `CUE_FASTER_WHISPER_URL` in your `.env`. Unused = no change to default behavior.
+
+---
+
 ## How to use it
 
 - **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere. Change this shortcut under **Settings → Keyboard shortcuts**.

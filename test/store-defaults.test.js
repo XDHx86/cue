@@ -58,3 +58,27 @@ test('ollama baseURL default is empty string; llm.js falls back to localhost', (
   assert.equal(typeof s.ollama.baseURL, 'string');
   assert.equal(s.ollama.baseURL, '', 'empty default URL triggers llm.js fallback to http://localhost:11434/v1');
 });
+
+test('stt defaults to auto with an empty fasterWhisperURL (batch fallback) and a deepgram URL', () => {
+  const s = store.getSettings();
+  assert.ok(s.stt, 'stt block exists in DEFAULTS');
+  assert.equal(s.stt.provider, 'auto', 'auto → batch by default since fasterWhisperURL is empty');
+  assert.equal(s.stt.fasterWhisperURL, '', "empty URL means 'not configured' — avoids a connect-fail storm for users without a server");
+  assert.equal(s.stt.model, '', 'stt.model default empty → stt.js uses whisper-1');
+});
+
+test('migrates a legacy top-level sttModel into stt.model and drops the old key', () => {
+  // Simulate a returning user whose cue-data.json still has the pre-Phase-3 top-level sttModel.
+  fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({ sttModel: 'whisper-1' }));
+  delete require.cache[require.resolve('../src/store')];
+  store = require('../src/store');
+  const s = store.getSettings();
+  assert.equal(s.stt && s.stt.model, 'whisper-1', 'whisper model moved to stt.model');
+  assert.equal(s.sttModel, undefined, 'legacy sttModel key is gone after migration');
+  // a user-set stt.model must NOT be overwritten by a stale legacy sttModel
+  fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({ sttModel: 'old', stt: { provider: 'auto', model: 'whisper-large' } }));
+  delete require.cache[require.resolve('../src/store')];
+  store = require('../src/store');
+  const s2 = store.getSettings();
+  assert.equal(s2.stt.model, 'whisper-large', 'explicit stt.model wins over the legacy sttModel');
+});

@@ -23,7 +23,19 @@ const DEFAULTS = {
   },
   // Ollama base URL — `ollama serve` exposes an OpenAI-compatible /v1 endpoint. Empty falls
   // back to http://localhost:11434/v1 in llm.js. Set via Settings or CUE_OLLAMA_BASE_URL.
-  ollama: { baseURL: '' }
+  ollama: { baseURL: '' },
+  // Speech-to-text streaming/lifecycle config. `provider` is 'auto' (pick the first streaming
+  // provider whose URL/key is configured, else fall back to batch createSTT), 'faster-whisper'
+  // (force the local WS server), or 'batch' (force the legacy flush loop). fasterWhisperURL
+  // defaults to '' (NOT a localhost URL) so 'auto' resolves to batch for the majority of users
+  // who don't run a local server — otherwise every capture would burn 3 connect failures before
+  // latching. Users who run faster-whisper enable it via Settings or CUE_FASTER_WHISPER_URL.
+  stt: {
+    provider: 'auto',
+    fasterWhisperURL: '',
+    deepgramURL: 'wss://api.deepgram.com/v1/listen',
+    model: '' // OpenAI Whisper model name for the batch path (default 'whisper-1' in stt.js)
+  }
 };
 
 let data = null;
@@ -44,6 +56,17 @@ function load() {
   if (data) return data;
   try { data = deepMerge(DEFAULTS, JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
   catch { data = deepMerge(DEFAULTS, {}); }
+
+  // One-time migration: older cue stored the OpenAI Whisper model at top-level `sttModel`. Move
+  // it into the new `stt.model` home (only if the new slot is empty, so a user's explicit
+  // stt.model wins). Runs before env overrides so a CUE_* value still wins over the migrated one.
+  if (data.sttModel !== undefined) {
+    if (!data.stt || !data.stt.model) {
+      data.stt = data.stt || { provider: 'auto', fasterWhisperURL: '', deepgramURL: '', model: '' };
+      data.stt.model = data.sttModel;
+    }
+    delete data.sttModel;
+  }
 
   // Apply CUE_* env-var overrides (populated by src/env.js before this require resolves).
   // Runtime-only: these are never saved to cue-data.json. The auto-switch below still runs

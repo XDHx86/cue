@@ -1,6 +1,11 @@
 // Speech-to-text factory. Decoupled from the LLM provider because Anthropic has
-// no audio API — we transcribe with whatever audio-capable key is available, and
+// no audio API — we transcribe with whatever audio-capable path is available, and
 // fall back across providers. Returns { text, provider } or { text:'', error }.
+//
+// This is the BATCH path (one WAV → one transcription). Streaming STT (faster-whisper
+// WebSocket) lives in src/stt-stream.js; when a streaming provider is configured and
+// reachable, main.js sends live PCM to a streaming session instead of this loop, and
+// only uses createSTT() as a degrade-to-batch fallback.
 const { pcmToWav } = require('./wav');
 
 async function transcribeOpenAI(apiKey, wav, model) {
@@ -25,10 +30,33 @@ async function transcribeGemini(apiKey, wav) {
   return ((res && res.text) || '').trim();
 }
 
+// Batch fallback for the faster-whisper server: POST the WAV to the server's /transcribe
+// endpoint (the reference server in docs/faster-whisper-setup.md exposes both a WS /stream
+// endpoint and this HTTP endpoint). `wsUrl` is converted to http(s)://; fetch is global in
+// Node 18+ / Electron's main process, so this stays dependency-free.
+async function transcribeFasterWhisperHTTP(wsUrl, wav) {
+  const httpUrl = wsUrl.replace(/^ws(s?):\/\//i, 'http$1://');
+  const res = await fetch(httpUrl.replace(/\/$/, '') + '/transcribe', {
+    method: 'POST',
+    headers: { 'content-type': 'audio/wav' },
+    body: wav,
+  });
+  if (!res.ok) throw new Error('faster-whisper HTTP ' + res.status);
+  const json = await res.json().catch(() => ({}));
+  return ((json && typeof json.text === 'string') ? json.text : '').trim();
+}
+
 function createSTT(settings) {
   const keys = settings.apiKeys || {};
+  const sttCfg = settings.stt || {};
+  const whisperModel = sttCfg.model || settings.sttModel || 'whisper-1'; // sttModel: legacy (pre-Phase-3)
+  const fwUrl = sttCfg.fasterWhisperURL || '';
+
   const chain = [];
-  if (keys.openai) chain.push({ p: 'openai', fn: (wav) => transcribeOpenAI(keys.openai, wav, settings.sttModel) });
+  // Local faster-whisper first (free, low-latency) when configured — same local-first order
+  // the streaming path prefers in src/stt-stream.js.
+  if (fwUrl) chain.push({ p: 'faster-whisper', fn: (wav) => transcribeFasterWhisperHTTP(fwUrl, wav) });
+  if (keys.openai) chain.push({ p: 'openai', fn: (wav) => transcribeOpenAI(keys.openai, wav, whisperModel) });
   if (keys.gemini) chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
 
   return {
@@ -51,4 +79,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT };
+module.exports = { createSTT, transcribeFasterWhisperHTTP };
