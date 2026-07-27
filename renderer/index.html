@@ -86,6 +86,28 @@
         <textarea id="resume-context" class="s-textarea" maxlength="12000" placeholder="Paste your résumé or professional background here. cue will use it as the factual source for career-related answers."></textarea>
         <div class="s-resume-actions"><span class="s-hint">Maximum 12,000 characters</span><button id="clear-resume" type="button">Clear résumé</button></div>
 
+        <label class="s-label">Assistant style <span class="s-hint">how cue frames its help; sent first in every system prompt</span></label>
+        <div class="s-seg" id="preprompt-seg">
+          <button data-preprompt="concise">Concise</button>
+          <button data-preprompt="interview">Interview</button>
+          <button data-preprompt="engineer">Engineer</button>
+          <button data-preprompt="copilot">Copilot</button>
+          <button data-preprompt="custom">Custom</button>
+        </div>
+        <textarea id="preprompt-custom" class="s-textarea" maxlength="1000" placeholder="Custom instructions: who cue is to you and how it should help. Used when 'Custom' is selected."></textarea>
+
+        <label class="s-label">Skills <span class="s-hint">.claude/skills/*.md in a project dir, applied as behavioral guidance</span></label>
+        <div class="s-seg" id="skill-seg">
+          <button data-skill="on">On</button>
+          <button data-skill="off">Off</button>
+        </div>
+        <div class="s-field"><span>Dir</span><input id="skill-dir" type="text" placeholder="/path/to/project" autocomplete="off" /></div>
+        <div class="s-resume-actions"><span class="s-hint" id="skill-status"></span><button id="skill-reload" type="button">Reload skills</button></div>
+
+        <label class="s-label">Memory notes <span class="s-hint">things cue should remember; stored locally in cue-data.json</span></label>
+        <textarea id="memory-notes" class="s-textarea" maxlength="4000" placeholder="Anything you want cue to keep in mind: preferences, ongoing context, people, deadlines..."></textarea>
+        <div class="s-resume-actions"><span class="s-hint">Maximum 4,000 characters</span></div>
+
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
         <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>

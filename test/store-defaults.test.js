@@ -82,3 +82,22 @@ test('migrates a legacy top-level sttModel into stt.model and drops the old key'
   const s2 = store.getSettings();
   assert.equal(s2.stt.model, 'whisper-large', 'explicit stt.model wins over the legacy sttModel');
 });
+
+// ---- phase-4 composition defaults (pre-prompt, skills, memory, résumé digest) ----
+
+test('composition defaults exist: prePrompt, prePromptTemplate, skillDir, skillEnabled, memory.notes, resumeSummary', () => {
+  const s = store.getSettings();
+  assert.equal(s.prePrompt, '', 'custom pre-prompt default empty (a built-in template is used)');
+  assert.equal(s.prePromptTemplate, 'concise', 'default template is concise direct');
+  assert.equal(s.skillDir, '', 'no project dir set by default → no skills injected');
+  assert.equal(s.skillEnabled, true, 'skills on by default (the dir gate makes this a no-op until a dir is set)');
+  assert.ok(s.memory && typeof s.memory === 'object', 'memory block exists');
+  assert.equal(s.memory.notes, '', 'user notes default empty');
+  assert.equal(s.resumeSummary, '', 'digest empty until the first regenerate-on-save run');
+});
+
+test('memory.notes merges cleanly with a persisted notes value (deepMerge does not drop it)', () => {
+  store.setSettings({ memory: { notes: 'prefers terse answers; uses cue for interviews' } });
+  const s = store.getSettings();
+  assert.equal(s.memory.notes, 'prefers terse answers; uses cue for interviews');
+});

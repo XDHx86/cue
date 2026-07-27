@@ -11,9 +11,11 @@ const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { createStreamSTT } = require('./src/stt-stream');
 const { createLLM } = require('./src/llm');
-const { MODES } = require('./src/prompts');
-const { appendResumeContext } = require('./src/profile-context');
-const { pushFinal, setPartial, clearPartial, liveTranscriptForPrompt } = require('./src/transcript');
+const { MODES, RESUME_SUMMARY_PROMPT } = require('./src/prompts');
+const { composeSystem } = require('./src/prompt-compose');
+const { createMemoryRunner } = require('./src/memory');
+const { loadSkillDir, clearSkillCache } = require('./src/skills');
+const { transcriptState, pushFinal, setPartial, clearPartial, liveTranscriptForPrompt, getFinals } = require('./src/transcript');
 const { normalizeSDKError, userMessage } = require('./src/errors');
 const { rms16 } = require('./src/wav');
 
@@ -37,6 +39,12 @@ const buffers = { you: [], them: [] };
 // channel falls back to the batch flush loop below. A session that latches sets sttStreamDisabled,
 // so the next openStreamSessions() uses batch for both channels — capture never pauses.
 const streamSessions = { you: null, them: null };
+// Rolling-summary compaction runner (src/memory.js). Created in app.whenReady (app.getPath isn't
+// safe before that). Started/stopped with the STT capture loop in setCapturing so memory accrues
+// only while the user is listening; its session summary persists to userData/cue-memory.json.
+// Its compaction calls have their own `summarizing` latch — they never touch state.busy, so a
+// hung summary cannot block an assist and an assist never waits on a summary.
+let memoryRunner = null;
 // transcript is now a ring-buffered transcriptState (src/transcript.js): finals capped at
 // TR_MAX_TURNS, plus live partials and a summary watermark. The lone read site (runFeature's
 // def.build) consumes liveTranscriptForPrompt() (finals + current partials); streaming finals
@@ -218,8 +226,10 @@ function setCapturing(active) {
   state.capturing = active;
   if (active) {
     openStreamSessions();
+    if (memoryRunner) { memoryRunner.load(); memoryRunner.start(); } // accrue memory only while listening
   } else {
     closeStreamSessions();
+    if (memoryRunner) { memoryRunner.stop(); memoryRunner.persist(); } // flush the rolling summary to cue-memory.json
   }
   send('capture:state', { active });
   return active;
@@ -283,7 +293,7 @@ async function runFeature(mode, userText) {
     if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
     armWatchdog();
     const fullText = await llm.stream({
-      system: appendResumeContext(def.system, settings.resumeContext),
+      system: composeSystem({ def, settings, memoryState: memoryRunner }),
       turns: [{ role: 'user', text: built }],
       imageDataUrl,
       onToken: (t) => { armWatchdog(); send('llm:token', { text: t }); }
@@ -304,9 +314,57 @@ async function runFeature(mode, userText) {
   }
 }
 
+// -------- résumé digest (background summary of the full résumé) --------
+// Regenerate the short career digest (settings.resumeSummary) from the full résumé using the
+// current provider. Fire-and-forget from the settings:set hook when resumeContext changes; never
+// blocks the save and never sets state.busy. On any failure (no key, provider down, empty reply)
+// the existing digest stands — the summary tier then falls back to the full résumé (tested in
+// profile-context.test.js). The 1500-char cap matches MAX_RESUME_SUMMARY_CHARS / RESUME_SUMMARY_PROMPT.
+async function regenerateResumeSummary() {
+  try {
+    const settings = store.getSettings();
+    const resume = (settings.resumeContext || '').trim();
+    if (!resume) return;
+    const llm = createLLM(settings);
+    if (!llm.ready) return;
+    const digest = await llm.stream({
+      system: RESUME_SUMMARY_PROMPT,
+      turns: [{ role: 'user', text: resume }],
+      imageDataUrl: null,
+      onToken: () => {}, // accumulate silently — no renderer tokens for a background digest
+    });
+    const clean = (digest || '').trim().slice(0, 1500);
+    if (clean) store.setSettings({ resumeSummary: clean });
+  } catch (e) {
+    if (DEBUG) console.log('[cue] resume digest failed:', e && e.message);
+  }
+}
+
 // -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
-ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; sttStreamDisabled = false; return store.setSettings(patch); });
+ipcMain.handle('settings:set', (_e, patch) => {
+  sttDisabled = false;
+  sttStreamDisabled = false;
+  // Regenerate the résumé digest when the user edited the full résumé. Fire-and-forget: the
+  // settings save is not blocked, and a missing/unready provider leaves the old digest in place
+  // (the summary tier then falls back to the full résumé). Clearing the résumé also clears the
+  // digest so stale career data isn't sent.
+  const before = store.getSettings().resumeContext;
+  const result = store.setSettings(patch);
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'resumeContext') && patch.resumeContext !== before) {
+    if (!String(patch.resumeContext || '').trim()) store.setSettings({ resumeSummary: '' });
+    else regenerateResumeSummary();
+  }
+  // Skill edits on disk don't bump the skills dir mtime; a settings save is a natural moment to
+  // drop the cache so the next composeSystem re-reads current skill contents.
+  clearSkillCache();
+  return result;
+});
+ipcMain.handle('skills:reload', () => {
+  clearSkillCache();
+  const skills = loadSkillDir(store.getSettings().skillDir || '');
+  return { count: skills.length };
+});
 ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
 ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
 ipcMain.handle('capture:state', () => ({ active: state.capturing }));
@@ -409,6 +467,34 @@ app.whenReady().then(() => {
 
   createWindow();
   registerShortcuts();
+
+  // Rolling-summary compaction runner. The watermark IS transcriptState.lastSummarizedTs (src/
+  // transcript.js exposes it for memory.js to advance), so this module advances it through the
+  // injected accessors rather than owning its own. The summarize call reuses createLLM with the
+  // MEMORY_SUMMARY_PROMPT system prompt (src/memory.js imports it from prompts.js); tokens are
+  // accumulated into the full text and never surfaced to the renderer (onToken is a no-op).
+  memoryRunner = createMemoryRunner({
+    getFinals: () => getFinals(),
+    getWatermark: () => transcriptState.lastSummarizedTs,
+    setWatermark: (ts) => { transcriptState.lastSummarizedTs = ts; },
+    summarize: async ({ system, userMessage }) => {
+      const settings = store.getSettings();
+      const llm = createLLM(settings);
+      if (!llm.ready) return ''; // no provider → appendSummary treats '' as a no-op; watermark still advances
+      try {
+        return await llm.stream({
+          system,
+          turns: [{ role: 'user', text: userMessage }],
+          imageDataUrl: null,
+          onToken: () => {},
+        });
+      } catch (e) {
+        throw e; // memory.js retries on throw (watermark not advanced); provider errors retry every 60 s
+      }
+    },
+    filePath: path.join(app.getPath('userData'), 'cue-memory.json'),
+  });
+  memoryRunner.load();
 
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

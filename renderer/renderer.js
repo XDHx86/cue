@@ -367,6 +367,20 @@
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
     $('#ollama-baseurl').value = (settings.ollama && settings.ollama.baseURL) || '';
     $('#resume-context').value = settings.resumeContext || '';
+    // Assistant style: "Custom" is the effective selection whenever custom text is set, so the seg
+    // reflects what composeSystem actually uses (resolvePrePrompt: custom text wins over template).
+    const usingCustom = !!(settings.prePrompt && settings.prePrompt.trim());
+    const pp = usingCustom ? 'custom' : (settings.prePromptTemplate || 'concise');
+    document.querySelectorAll('#preprompt-seg button').forEach((b) => b.classList.toggle('on', b.dataset.preprompt === pp));
+    const customArea = $('#preprompt-custom');
+    customArea.value = usingCustom ? settings.prePrompt : '';
+    customArea.style.display = (pp === 'custom') ? '' : 'none';
+    // Skills: On/Off seg + dir; status is the reload button's transient hint, cleared on open.
+    const skillOn = settings.skillEnabled !== false;
+    document.querySelectorAll('#skill-seg button').forEach((b) => b.classList.toggle('on', (b.dataset.skill === 'on') === skillOn));
+    $('#skill-dir').value = settings.skillDir || '';
+    $('#skill-status').textContent = '';
+    $('#memory-notes').value = (settings.memory && settings.memory.notes) || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     syncAssistShortcutLabels();
@@ -392,6 +406,25 @@
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     $('#s-status').textContent = statusText();
   }));
+  document.querySelectorAll('#preprompt-seg button').forEach((b) => b.addEventListener('click', () => {
+    const pp = b.dataset.preprompt;
+    document.querySelectorAll('#preprompt-seg button').forEach((x) => x.classList.toggle('on', x === b));
+    const customArea = $('#preprompt-custom');
+    customArea.style.display = (pp === 'custom') ? '' : 'none';
+    if (pp !== 'custom') customArea.value = '';
+  }));
+  document.querySelectorAll('#skill-seg button').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('#skill-seg button').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+  $('#skill-reload').addEventListener('click', async () => {
+    $('#skill-status').textContent = 'Loading…';
+    try {
+      const r = await cue.skillsReload();
+      $('#skill-status').textContent = 'Loaded ' + (r && r.count != null ? r.count : 0) + ' skill' + (r && r.count === 1 ? '' : 's');
+    } catch {
+      $('#skill-status').textContent = 'Reload failed';
+    }
+  });
   async function saveSettings() {
     settings.apiKeys.openai = $('#key-openai').value.trim();
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
@@ -399,6 +432,16 @@
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
     settings.ollama = { baseURL: $('#ollama-baseurl').value.trim() };
     settings.resumeContext = $('#resume-context').value.trim();
+    // Pre-prompt: a built-in template clears the custom textarea; "Custom" uses the textarea text.
+    const pp = [...document.querySelectorAll('#preprompt-seg button.on')].map((b) => b.dataset.preprompt)[0] || 'concise';
+    settings.prePromptTemplate = pp;
+    settings.prePrompt = (pp === 'custom') ? $('#preprompt-custom').value.trim() : '';
+    // Skills: On/Off gate + project dir. The On/Off state is read from the seg so the user's last
+    // click is what persists, regardless of the loaded default.
+    const skillOn = [...document.querySelectorAll('#skill-seg button.on')].map((b) => b.dataset.skill)[0] === 'on';
+    settings.skillEnabled = skillOn;
+    settings.skillDir = $('#skill-dir').value.trim();
+    settings.memory = { notes: $('#memory-notes').value.trim() };
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();

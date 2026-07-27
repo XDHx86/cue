@@ -9,6 +9,22 @@ const DEFAULTS = {
   provider: 'openai',
   smart: false,
   resumeContext: '',
+  // Two-tier résumé (profile-context.js). resumeSummary is the auto-generated ≤1500-char career
+  // digest that résumé-enabled *small* modes send instead of the full ~12k résumé. Regenerated
+  // by main.js when resumeContext changes (settings:set); empty until then → summary tier falls
+  // back to the full résumé.
+  resumeSummary: '',
+  // System-prompt composition (src/prompt-compose.js). prePrompt is free-form custom instructions
+  // (set when the "Custom" template is selected); prePromptTemplate picks a built-in when it isn't.
+  prePrompt: '',
+  prePromptTemplate: 'concise',
+  // Skills (src/skills.js): .claude/skills/*.md under skillDir, applied as behavioral guidance.
+  // skillEnabled is the secondary gate — no skillDir set means no skills injected regardless.
+  skillDir: '',
+  skillEnabled: true,
+  // Conversation memory. Rolling summary lives in cue-memory.json (src/memory.js), NOT here; only
+  // the user's hand-edited notes persist in settings so they survive across sessions.
+  memory: { notes: '' },
   shortcuts: { assist: 'CommandOrControl+Return' },
   // ollama's key is a non-empty sentinel ('ollama'), NOT a real key: the OpenAI SDK constructor
   // requires a non-empty apiKey, Ollama ignores it, and a non-empty value stops the auto-switch

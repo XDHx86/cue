@@ -136,6 +136,18 @@ The setup — a reference Python server (with VAD endpoint detection) and the ex
 
 ---
 
+## Tailor cue's behavior (optional: style, skills, memory)
+
+Three **Settings** panels let you shape how cue responds without editing prompts:
+
+- **Assistant style** — pick a built-in persona (Concise · Interview coach · Senior engineer · Friendly meeting copilot) or **Custom** free-form instructions. Your choice is placed *first* in every system prompt, framing "who cue is to you." Custom text wins when set; otherwise the selected template applies.
+- **Skills** — point cue at a project directory and it loads `.claude/skills/*.md` from `<dir>/.claude/skills/` as **behavioral guidance** (instructions, not data). Toggle On/Off and edit the path anytime; click **Reload skills** after editing skill files on disk so cue picks up the change. Capped at 8,000 characters of guidance.
+- **Memory notes** — free-form notes (≤4,000 chars) cue keeps in mind across the session ("I'm interviewing at Acme," "prefer terse answers," …), stored locally in `cue-data.json`. On top of your notes, cue maintains an **automatic rolling summary** it compacts from the transcript while you listen, so it carries prior context forward even across a long meeting. The rolling summary persists separately (`cue-memory.json`) and never blocks an answer — compaction runs on its own 60 s loop and never touches the "busy" latch an Assist waits on.
+
+Your **résumé / professional background** (above these panels) rounds out career-related answers; cue also keeps an auto-generated short digest of it so token-light modes get the gist instead of the full résumé.
+
+---
+
 ## How to use it
 
 - **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere. Change this shortcut under **Settings → Keyboard shortcuts**.
