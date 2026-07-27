@@ -9,10 +9,11 @@ loadDotenv();
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
+const { createStreamSTT } = require('./src/stt-stream');
 const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
 const { appendResumeContext } = require('./src/profile-context');
-const { transcriptState, pushFinal, getFinals } = require('./src/transcript');
+const { transcriptState, pushFinal, getFinals, setPartial, clearPartial } = require('./src/transcript');
 const { normalizeSDKError, userMessage } = require('./src/errors');
 const { rms16 } = require('./src/wav');
 
@@ -27,11 +28,17 @@ const RESERVED_SHORTCUTS = new Set([
 
 // -------- capture / transcript state --------
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
-let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
+let sttDisabled = false;       // batch path: the key can't reach any speech model (stops retry spam)
+let sttStreamDisabled = false; // stream path: a faster-whisper session latched after 3 connect failures
 const buffers = { you: [], them: [] };
+// Streaming sessions per channel (src/stt-stream.js). When a channel has a session, its live PCM
+// goes straight to the session (never buffered, never gated by state.busy); when it doesn't, the
+// channel falls back to the batch flush loop below. A session that latches sets sttStreamDisabled,
+// so the next openStreamSessions() uses batch for both channels — capture never pauses.
+const streamSessions = { you: null, them: null };
 // transcript is now a ring-buffered transcriptState (src/transcript.js): finals capped at
 // TR_MAX_TURNS, plus live partials and a summary watermark. The lone read site (runFeature's
-// def.build) consumes getFinals(); the flush loop pushes finals via pushFinal().
+// def.build) consumes getFinals(); streaming finals are pushed via pushFinal(), batch finals too.
 const FLUSH_MS = 3500;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.6); // ~0.6s
 const RMS_GATE = 240;
@@ -84,7 +91,11 @@ function createWindow() {
   win.webContents.on('render-process-gone', (_e, d) => console.log('[cue] renderer gone', JSON.stringify(d)));
 }
 
-// -------- STT flushing --------
+// -------- STT flushing (batch fallback) --------
+// Used when no streaming STT is configured, or after a streaming session has latched. Streams
+// whose faster-whisper WS server is up never touch this path — their PCM goes straight to the
+// session via sendAudio (see mic:pcm / system:pcm handlers), so capture is never gated by an
+// in-flight LLM turn (state.busy) and never pauses when the server hiccups (it latches → batch).
 async function flushChannel(channel) {
   if (state.transcribing[channel]) return;
   const chunks = buffers[channel];
@@ -125,7 +136,7 @@ function handleSttError(err, settings) {
   console.log('[stt] error', ne.provider, ne.status, ne.code, ne.message);
   if (sttDisabled) return;
   const noAccess = ne.status === 401 || ne.status === 403 || ne.code === 'model_not_found';
-  sttDisabled = true; // stop hammering the API every few seconds; reset on settings:set (main.js L198)
+  sttDisabled = true; // stop hammering the API every few seconds; reset on settings:set
   if (noAccess) {
     send('status', { message: 'Transcription off: your ' + ne.provider + ' key has no access to a speech-to-text model. ' + ne.suggestion + ' Screen + LeetCode still work; fix the key and reopen Settings to re-enable listening.' });
   } else {
@@ -139,6 +150,64 @@ function startFlushLoop() {
 }
 function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTimer = null; } }
 
+// -------- streaming STT pipeline --------
+// On capture start, openStreamSessions() picks streaming mode (a faster-whisper WS session per
+// channel) when a streaming provider is configured and hasn't latched; otherwise it runs the
+// batch flush loop. Sessions receive live PCM and emit partial/final transcripts into the ring
+// buffer + the renderer's transcript:partial channel. closeStreamSessions() tears it all down.
+function openStreamSessions() {
+  const settings = store.getSettings();
+  const stream = createStreamSTT(settings);
+  if (stream.available && !sttStreamDisabled) {
+    for (const ch of ['you', 'them']) {
+      const session = stream.createSession({
+        channel: ch,
+        language: null,
+        onFinal: ({ text, ts }) => {
+          const turn = { channel: ch, text, ts: ts || Date.now() };
+          pushFinal(turn);                 // ring buffer (capped at TR_MAX_TURNS)
+          clearPartial(ch);               // the live partial is now finalized — clear the cell
+          if (DEBUG) console.log(`[TRANSCRIPT] ${ch === 'you' ? 'You' : 'Them'}:`, text);
+          send('transcript', turn);        // finalized turn → renderer strip (Phase 3c)
+        },
+        onPartial: ({ text, ts }) => {
+          setPartial(ch, text);            // live per-channel partial for Ctrl+Alt+A (Phase 3d)
+          send('transcript:partial', { channel: ch, text, ts: ts || Date.now() });
+        },
+        onError: (e) => { if (DEBUG) console.log('[stt-stream]', ch, e && e.message); },
+        onStatus: (s) => {
+          if (s.active) {
+            send('stt:status', { active: true, provider: s.provider, channel: ch });
+          } else {
+            // Session latched (3 connect failures). Latch globally so a re-toggle uses batch
+            // instead of hammering the dead server; reset on settings:set (a config change).
+            sttStreamDisabled = true;
+            send('stt:status', { active: false, reason: s.reason || 'streaming unavailable', channel: ch });
+          }
+        },
+      });
+      if (session) { streamSessions[ch] = session; session.start(); }
+    }
+  }
+  // No streaming session opened (no provider, latched, or createSession returned null): use the
+  // batch flush loop so capture never pauses. A latched-but-configured server reports itself so
+  // the renderer can show a "degraded to batch" status badge.
+  if (!streamSessions.you && !streamSessions.them) {
+    if (stream.available && sttStreamDisabled) {
+      send('stt:status', { active: false, reason: 'streaming disabled after failures — using batch transcription' });
+    }
+    startFlushLoop();
+  }
+}
+
+function closeStreamSessions() {
+  for (const ch of ['you', 'them']) {
+    if (streamSessions[ch]) { try { streamSessions[ch].close(); } catch {} streamSessions[ch] = null; }
+  }
+  stopFlushLoop();
+  buffers.you = []; buffers.them = [];
+}
+
 // -------- capture toggle --------
 // Mic + system audio are both captured in the RENDERER (getUserMedia for the mic,
 // getDisplayMedia loopback for system audio) so they run inside cue's own process
@@ -146,10 +215,9 @@ function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTim
 function setCapturing(active) {
   state.capturing = active;
   if (active) {
-    startFlushLoop();
+    openStreamSessions();
   } else {
-    stopFlushLoop();
-    buffers.you = []; buffers.them = [];
+    closeStreamSessions();
   }
   send('capture:state', { active });
   return active;
@@ -233,13 +301,25 @@ async function runFeature(mode, userText) {
 
 // -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
-ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
+ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; sttStreamDisabled = false; return store.setSettings(patch); });
 ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
 ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
 ipcMain.handle('capture:state', () => ({ active: state.capturing }));
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
-ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) buffers.you.push(Buffer.from(arrayBuffer)); });
-ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) buffers.them.push(Buffer.from(arrayBuffer)); });
+// Live PCM: route to the streaming session if one owns this channel (never gated by state.busy —
+// asking never interrupts transcription), else accumulate for the batch flush loop.
+ipcMain.on('mic:pcm', (_e, arrayBuffer) => {
+  if (!state.capturing) return;
+  const pcm = Buffer.from(arrayBuffer);
+  if (streamSessions.you) streamSessions.you.sendAudio(pcm);
+  else buffers.you.push(pcm);
+});
+ipcMain.on('system:pcm', (_e, arrayBuffer) => {
+  if (!state.capturing) return;
+  const pcm = Buffer.from(arrayBuffer);
+  if (streamSessions.them) streamSessions.them.sendAudio(pcm);
+  else buffers.them.push(pcm);
+});
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
