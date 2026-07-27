@@ -112,6 +112,22 @@ cue is hidden from most screen-share tools automatically — **Google Meet, Micr
 
 ---
 
+## Use Ollama (local models)
+
+Prefer to keep everything on your machine? cue can talk to a **local [Ollama](https://ollama.com) server** — no API key, no telemetry; the models run on your hardware.
+
+1. **Start Ollama** — it serves an OpenAI-compatible API:
+   ```bash
+   ollama serve
+   ollama pull llama3.2 llama3.3      # the models cue defaults to (fast / smart)
+   ```
+2. In cue **Settings** (`⌘` `,`), pick the **Ollama** provider. No key is needed — the key field is disabled on purpose; cue treats a configured model as "ready."
+3. If your server isn't at the default, set **Ollama base URL** to its `/v1` endpoint (default `http://localhost:11434/v1`).
+
+> cue never auto-switches **to** Ollama — a running local server isn't guaranteed — so select it yourself. You can also set the base URL from your `.env` via `CUE_OLLAMA_BASE_URL`. Transcription still needs an OpenAI or Gemini key (Ollama is chat-only, same as Anthropic).
+
+---
+
 ## How to use it
 
 - **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere. Change this shortcut under **Settings → Keyboard shortcuts**.
@@ -172,6 +188,19 @@ Run `xattr -cr /Applications/cue.app` in Terminal once (see Install → Option A
 - No accounts, no servers, no telemetry. cue collects nothing.
 - Your API keys live in a local file (`cue-data.json`) and are sent only to the provider you chose.
 - Screenshots and audio are sent to your AI provider only when a feature runs, and are not stored by cue beyond the current session's transcript (kept in memory).
+
+## Further documentation
+
+| Doc | For |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | the deeper architecture — pipeline, IPC, prompt composition, settings, releases |
+| [docs/contributing.md](docs/contributing.md) | contributor guide — setup, tests, commits, PRs |
+| [docs/release.md](docs/release.md) | tag-driven release & local build workflow |
+
+The `.claude/docs/` tree is **AI-internal working memory** (architecture decisions, conventions,
+current state, retrieval/compression policies) maintained by Claude Code to preserve context
+across long-lived, multi-session development. It lives in the working tree (`.claude/` is
+gitignored) rather than in the published repo, so it's not required reading for contributors.
 
 ## Contributing
 
