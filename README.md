@@ -152,6 +152,7 @@ Your **résumé / professional background** (above these panels) rounds out care
 
 - **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere. Change this shortcut under **Settings → Keyboard shortcuts**.
 - **`Ctrl` `Alt` `A` — Immediate assist.** While listening, answer from the **live** transcript — including the incomplete sentence the other person is saying right now — without waiting for them to finish or pausing transcription. (On macOS that's `⌃` `⌥` `A`.) Not configurable; it's reserved distinct from the Assist shortcut above.
+- **`Ctrl` `Alt` `C` — Show / hide the overlay.** Toggle cue on and off screen entirely — everything vanishes (toolbar included), and the same shortcut brings it back. Use it to dismiss cue before a screen-share or recording, or just to clear your desktop. Listening keeps going while hidden: the transcript keeps filling and `Ctrl` `Alt` `A` still answers from the live state, so you can hide the panel and stay covered. (On macOS that's `⌃` `⌥` `C`.) Not configurable, and reserved so it never collides with your Assist shortcut.
 - **`⌘` `H` — Solve what's on screen.** Screenshots a coding problem and returns the approach, code, and time/space complexity.
 - **The `▢` button** (top bar) — start/stop **listening** to a meeting. The green dot means it's live.
 - **Type a question** in the box and press `↵` to ask about your screen or conversation.

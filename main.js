@@ -26,7 +26,8 @@ const DEFAULT_ASSIST_SHORTCUT = 'CommandOrControl+Return';
 const RESERVED_SHORTCUTS = new Set([
   'commandorcontrol+h',
   'commandorcontrol+shift+x',
-  'control+alt+a' // immediate assist — always-on, not user-configurable (see registerShortcuts)
+  'control+alt+a', // immediate assist — always-on, not user-configurable (see registerShortcuts)
+  'control+alt+c'  // show/hide the overlay — always-on, not user-configurable (see registerShortcuts)
 ]);
 
 // -------- capture / transcript state --------
@@ -55,6 +56,25 @@ const RMS_GATE = 240;
 let flushTimer = null;
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
+
+// Show/hide the whole overlay window (Ctrl+Alt+C). Distinct from the renderer's panel-collapse
+// "Hide" button, which only folds the panel and keeps the top bar visible — this toggles the
+// BrowserWindow itself, so the overlay vanishes entirely (no chrome at all) and comes back on the
+// same shortcut. Because cue has no dock/taskbar presence (skipTaskbar + dock.hide on macOS), the
+// shortcut is the only way back from hidden — which is the point: a global, always-available toggle.
+// Capture (mic + system audio + STT) keeps running while hidden — the renderer process stays
+// alive, so an ongoing meeting keeps transcribing and Ctrl+Alt+A still answers from the live state.
+function toggleVisibility() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isVisible()) {
+    win.hide();
+  } else {
+    win.showInactive(); // show without stealing focus from the app behind the overlay
+    // Windows can drop the 'screen-saver' z-order level on re-show (Phase-0b raised it exactly so
+    // Zoom's share overlay can't hide cue). Reapply on every re-show; macOS retains the level.
+    if (process.platform !== 'darwin') win.setAlwaysOnTop(true, 'screen-saver', 1);
+  }
+}
 
 // -------- window --------
 function createWindow() {
@@ -430,6 +450,12 @@ function registerShortcuts() {
   // collide. STT sessions are owned by setCapturing and never gated by state.busy, so requesting
   // an answer never interrupts the ongoing transcription stream (ADR-008).
   globalShortcut.register('Control+Alt+A', () => runFeature('assist', ''));
+
+  // Show/hide the overlay. Not user-configurable — always available so the user can dismiss cue
+  // entirely (toolbar included) during a share/record and bring it back from anywhere. The
+  // renderer process stays alive while hidden, so capture + the live transcript keep running —
+  // hiding is purely visual and Ctrl+Alt+A still answers from the current speaker state.
+  globalShortcut.register('Control+Alt+C', () => toggleVisibility());
 
   const settings = store.getSettings();
   const configured = settings.shortcuts && settings.shortcuts.assist;
