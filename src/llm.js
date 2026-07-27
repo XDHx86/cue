@@ -117,16 +117,25 @@ function createLLM(settings) {
   // since some SDKs like Anthropic require a maxTokens value.
   const maxTokens = 4096;
 
-  if (DEBUG) console.log('[DEBUG LLM] createLLM initialized:', { provider, model, isKeyPresent: !!apiKey, ready: !!apiKey && !!model });
+  if (DEBUG) console.log('[DEBUG LLM] createLLM initialized:', { provider, model, isKeyPresent: !!apiKey, ready: (provider === 'ollama' ? !!model : (!!apiKey && !!model)) });
 
   return {
     provider, model, apiKey,
-    ready: !!apiKey && !!model,
+    // Ollama has no real key — the 'ollama' sentinel satisfies the OpenAI SDK constructor but
+    // should not gate readiness. Ollama is ready as long as a model is configured.
+    ready: provider === 'ollama' ? !!model : (!!apiKey && !!model),
     async stream(params) {
       if (DEBUG) console.log('[DEBUG LLM] stream() invoked for provider:', provider);
       const args = { apiKey, model, provider, maxTokens, ...params };
       if (provider === 'openai') return streamOpenAI(args);
       if (provider === 'nvidia') return streamOpenAI({ ...args, baseURL: 'https://integrate.api.nvidia.com/v1' });
+      // Ollama reuses the OpenAI SDK against ollama serve's OpenAI-compatible /v1 endpoint.
+      // apiKey is the 'ollama' sentinel (Ollama ignores it; the SDK constructor needs non-empty).
+      if (provider === 'ollama') return streamOpenAI({
+        ...args,
+        apiKey: 'ollama',
+        baseURL: (settings.ollama && settings.ollama.baseURL) || 'http://localhost:11434/v1'
+      });
       if (provider === 'anthropic') return streamAnthropic(args);
       if (provider === 'gemini') return streamGemini(args);
       throw new Error('unknown provider: ' + provider);

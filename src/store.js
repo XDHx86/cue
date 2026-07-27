@@ -10,13 +10,20 @@ const DEFAULTS = {
   smart: false,
   resumeContext: '',
   shortcuts: { assist: 'CommandOrControl+Return' },
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '' },
+  // ollama's key is a non-empty sentinel ('ollama'), NOT a real key: the OpenAI SDK constructor
+  // requires a non-empty apiKey, Ollama ignores it, and a non-empty value stops the auto-switch
+  // below from flipping away from a user-selected ollama just because the key isn't "real".
+  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '', ollama: 'ollama' },
   models: {
     openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
     anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
     gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
-    nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' }
-  }
+    nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' },
+    ollama: { fast: 'llama3.2', smart: 'llama3.3' }
+  },
+  // Ollama base URL — `ollama serve` exposes an OpenAI-compatible /v1 endpoint. Empty falls
+  // back to http://localhost:11434/v1 in llm.js. Set via Settings or CUE_OLLAMA_BASE_URL.
+  ollama: { baseURL: '' }
 };
 
 let data = null;
