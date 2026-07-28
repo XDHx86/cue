@@ -268,11 +268,11 @@ button:focus { outline: none; }
   background: rgba(0,0,0,0.35); backdrop-filter: blur(4px);
 }
 #settings-scrim.hidden { display: none; }
-#settings { width: min(440px, 92vw); padding: 18px 20px; -webkit-app-region: no-drag; }
-.s-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+#settings { width: min(440px, 92vw); max-height: calc(100vh - 40px); padding: 18px 20px; display: flex; flex-direction: column; -webkit-app-region: no-drag; }
+.s-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex: 0 0 auto; }
 .s-title { font-size: 17px; font-weight: 600; color: var(--tx-1); }
 .s-close { border: none; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: var(--r-pill); cursor: pointer; }
-.s-body { display: flex; flex-direction: column; gap: 8px; }
+.s-body { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .s-label { color: var(--tx-2); font-size: 13px; font-weight: 600; margin-top: 8px; }
 .s-hint { color: var(--tx-mut); font-weight: 400; font-size: 11px; margin-left: 6px; }
 .s-seg { display: flex; gap: 6px; }
