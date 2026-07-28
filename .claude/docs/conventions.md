@@ -22,7 +22,8 @@ Permanent rules of this repo. Break one only with a deliberate decision logged i
   feature tempts you to add one, first look for a dependency-free path (the
   [src/env.js](../../src/env.js) hand-rolled `.env` loader is the precedent).
 - `electron-builder` config uses **`asar: false`**; the `files` allowlist in
-  [package.json](../../package.json) is `main.js`, `preload.js`, `src/**`, `renderer/**`.
+  [package.json](../../package.json) is `main.js`, `preload.js`, `src/**`, `renderer/**`,
+  `python/**` (the managed STT service ships unpacked so the spawned process can read it).
   Keep any new top-level asset in that allowlist or it won't ship.
 
 ## Platform branches — grep, don't assume
@@ -67,8 +68,27 @@ are **user-editable and change fast** — treat them as defaults, not constraint
 
 `npm test` = `node --test` over [test/](../../test/). Add tests as `test/<thing>.test.js`.
 Electron-dependent bits must be **param-injected** like [src/profile-context.js](../../src/profile-context.js)
-so tests don't import `electron`. Run one test: `node --test test/<file>.test.js`; filter:
-`node --test --test-name-pattern="…" .`
+so tests don't import `electron` — `src/stt-process.js` and `src/stt-engine.js` follow this
+(`createSttProcessManager({ spawn, spawnSync, fs, getPath })`), so the STT tests spawn no Python
+and require no Electron. Run one test: `node --test test/<file>.test.js`; filter:
+`node --test --test-name-pattern="…" .` Paired source-of-truth lists that cross a language
+boundary get a drift guard — `test/stt-models.test.js` asserts `STT_MODEL_SIZES` equals
+`python/cue_stt_service.py:MODELS`.
+
+## Local STT — engine-agnostic seam
+
+- `src/stt-engine.js` is the single seam: `registerEngine(id, factory)`. A new local engine
+  (whisper.cpp) is ONE factory implementing `{ start, sendAudio, close }` +
+  onFinal/onPartial/onStatus/onError + an `ENGINE_META` label. `main.js` and `src/stt-stream.js`
+  never name an engine — they ask the registry.
+- The managed service manager (`src/stt-process.js`) is param-injected; keep it that way.
+  `download_root` must be passed on `model_download`/`model_delete`/`models_list` — the service's
+  sticky root is unset until a `load`, and Settings/the CLI can manage the cache before any load.
+- The model-size list is PAIRED across JS and Python; change both together (the test catches
+  drift). The Python service resolves a name to the HuggingFace repo; Node only lists + scans the
+  cache dir.
+- `stt.enabled === false` is a hard stop at `openStreamSessions()` — no sessions, no batch loop,
+  PCM drops. Don't gate STT on `state.busy` (asking never interrupts transcription, ADR-008).
 
 ## Workflow & contribution
 

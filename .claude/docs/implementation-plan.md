@@ -26,16 +26,15 @@ below by **navigating to the named symbol**, not the raw line (lines drift with 
 | **0b** | B2 Zoom overlay + primary display | ✅ committed (`2faec2b`) — detail below archived |
 | **1** | F1 `.env` system | ✅ committed (`b10fa03`) — detail below archived |
 | **2** | F3 Ollama provider | ✅ committed (`48c6552`) — detail below archived |
-| **3** | F4 faster-whisper + F6 continuous streaming + F13 `Ctrl+Alt+A` | ✅ committed (`93bcf58` `a3f3a4b` `ee29e56` `9d17ac9`) — detail below archived |
+| **3** | F4 faster-whisper + F6 continuous streaming + F13 `Ctrl+Alt+A` | ✅ committed (`93bcf58` `a3f3a4b` `ee29e56` `9d17ac9`); **enhanced on `feat/local-stt-engine`** with a managed Python service + engine-agnostic registry (`36f83af`→`e1bf887`, ADR-013) — detail below |
 | **4** | F8/F9/F10/F11 composition-point refactor (skills, memory, pre-prompt, résumé) | 🟡 next |
-| **5** | F5 show/hide (`Ctrl+Alt+C`), F2 drag, F12 vision speed | ⬜ not started |
-| **4** | F8/F9/F10/F11 composition-point refactor (skills, memory, pre-prompt, résumé) | ⬜ not started |
-| **5** | F5 show/hide (`Ctrl+Alt+C`), F2 drag, F12 vision speed | ⬜ not started |
+| **5** | F5 show/hide (`Ctrl+Alt+C`), F2 drag, F12 vision speed | ✅ committed (`abca5b6` `57e3716`) — in `main` |
 | **6** | F7 HTTP error codes + polish | ✅ committed (`fdbe892`) — detail below archived |
 
-Compression note: the detailed sections for committed phases (0a/0b/1/6) are retained below
-for reference until the work has fully settled, then they will be reduced to the status line
-above. Detail is kept in full for the in-flight phase (2) and not-started phases (3–5).
+Compression note: the detailed sections for committed phases are retained below for reference
+until the work has fully settled, then reduced to the status line above. Committed so far:
+0a/0b/1/2/3/5/6 (all in `main`, except the Phase-3 managed-engine enhancement on
+`feat/local-stt-engine`). Detail is kept in full only for the in-flight phase (**4**).
 
 ---
 
@@ -188,7 +187,17 @@ The single `appendResumeContext(...)` call becomes
   enumerate `ollama`.
 - Docs: README "Use Ollama (local models)".
 
-### Phase 3 — faster-whisper + continuous streaming + immediate assist  ⬜ (largest)
+### Phase 3 — faster-whisper + continuous streaming + immediate assist  ✅ committed
+
+> **Enhanced on `feat/local-stt-engine` (ADR-013).** The original plan below — external WS
+> server you run, cue the client — shipped in `main` as `src/stt-stream.js`. The
+> `feat/local-stt-engine` branch added a **managed** path: `src/stt-process.js` spawns +
+> supervises a Python `faster-whisper` service over line-delimited JSON-RPC (venv bootstrap,
+> restart-with-backoff, latch after 3, clean shutdown); `src/stt-engine.js` registers engines
+> by id so `main.js`/`stt-stream.js` never name one; `auto` prefers the managed engine when
+> its venv is ready. The external WS server remains as the `faster-whisper` transport. See
+> ADR-013 in [decisions.md](decisions.md) + [docs/faster-whisper-setup.md](../../docs/faster-whisper-setup.md).
+> The Phase-3 plan bullets below are kept as the record of the streaming-pipeline design.
 
 **3a — F4 faster-whisper provider:**
 - NEW `src/stt-stream.js`: `createStreamSTT(settings) → { available, provider,
@@ -257,7 +266,9 @@ The single `appendResumeContext(...)` call becomes
   engineer / Friendly meeting copilot / Custom); skills toggle + dir path + reload; memory-notes
   textarea (maxlength 4000). Wire in `fillSettings`/`saveSettings`.
 
-### Phase 5 — F5 show/hide, F2 drag, F12 vision  ⬜
+### Phase 5 — F5 show/hide, F2 drag, F12 vision  ✅ committed (`abca5b6` `57e3716`, in `main`)
+
+> Built in `main` before the `feat/local-stt-engine` branch. Kept below as the record:
 - **F5 `Ctrl+Alt+C`**: `main.js` add `'control+alt+c'` to `RESERVED_SHORTCUTS`; register
   `Control+Alt+C` → toggle `win.isVisible() ? win.hide() : win.showInactive()` (reapply
   `setAlwaysOnTop(true,'screen-saver',1)` on Windows after re-show). Match the existing

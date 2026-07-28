@@ -49,7 +49,7 @@ check bypasses the key for `ollama`.
 **Rationale:** avoids per-provider SDKs for OpenAI-compatible gateways; one code path.
 **Alternatives rejected:** per-provider SDKs; treating the sentinel as a real key.
 
-## ADR-006 — faster-whisper runs as a local WebSocket streaming server — decided (Phase 3)
+## ADR-006 — faster-whisper runs as a local WebSocket streaming server — implemented
 **Decision:** cue is the WS client to a local faster-whisper server (`ws://localhost:9080`),
 with a POST batch fallback.
 **Rationale:** zero-latency streaming STT, no native modules in cue; the server runs
@@ -62,7 +62,7 @@ prompts; no embeddings / vector store.
 **Rationale:** a local, no-infra memory that fits cue's "plain JS, no deps" stance.
 **Alternatives rejected:** an embedding/vector store; cloud RAG.
 
-## ADR-008 — Continuous streaming STT is the default pipeline — decided (Phase 3)
+## ADR-008 — Continuous streaming STT is the default pipeline — implemented
 **Decision:** capture never pauses; the assistant tracks live partial + finalized transcripts;
 VAD is used only for endpoint/segmentation, not to start transcription; a user may request an
 immediate response (Ctrl+Alt+A) at any time without interrupting the transcription stream
@@ -98,3 +98,17 @@ never persisted to `cue-data.json`.
 **Rationale:** consistency with ADR-003 (no deps); keeping secrets out of the persisted
 settings file.
 **Alternatives rejected:** `dotenv` (pulls a dep chain); persisting env into `cue-data.json`.
+
+## ADR-013 — Local STT is a managed Python service over JSON-RPC, engine-agnostic — implemented
+**Decision:** local Speech-to-Text runs as a Python process (`python/cue_stt_service.py`) spawned
+and managed by a Node manager (`src/stt-process.js`) over line-delimited JSON-RPC on
+stdin/stdout (not the external WebSocket of ADR-006). The manager owns venv bootstrap, process
+restart-with-backoff + latch, clean shutdown. `src/stt-engine.js` registers engines by id so the
+rest of the app (`main.js`, `src/stt-stream.js`) never names one; `auto` prefers the local engine
+when its venv is ready. ADR-006's external-WS server remains the `faster-whisper` transport; both
+expose the same `{ start, sendAudio, close }` + partial/final surface to `stt-stream`.
+**Rationale:** zero-config local STT (users never run `pip`) with no native modules in cue
+(ADR-003); the engine seam lets a future whisper.cpp register in one call. CPU-only venv by
+default (CUDA is an opt-in manual step) so `npm install` never pulls the CUDA stack.
+**Alternatives rejected:** a native whisper binding in cue (native module); ship a bundled Python
+(repackaging); route the managed engine through the WS client (two transports, one surface wins).

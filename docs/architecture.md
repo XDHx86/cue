@@ -55,14 +55,15 @@ to ship. This is a deliberate architectural decision (ADR-001 in
 
 ## Transcription pipeline
 
-Received PCM lands in `buffers.you` / `buffers.them` in main. A `setInterval` flush loop
-([`main.js`](../main.js), every `FLUSH_MS = 3500` ms) transcribes each channel, gated by a
-minimum length and an RMS silence gate ([`src/wav.js`](../src/wav.js) `rms16`). Finals push
-into the **ring-buffered** transcript in [`src/transcript.js`](../src/transcript.js):
-`finals` is capped at `TR_MAX_TURNS = 200` (oldest evicted beyond the cap), `partials` holds
-the live per-channel streaming partial, and `lastSummarizedTs` is the rolling-summary
-watermark. The `transcript` turn shape `{ channel, text, ts }` is preserved so prompt
-formatting is unchanged.
+PCM arrives as `mic:pcm` / `system:pcm`. The **default path is streaming**: on capture start
+`openStreamSessions()` builds a per-channel session that consumes PCM live and emits partial/final
+turns into the ring buffer. The **batch flush loop** (`FLUSH_MS = 3500`, gated by `MIN_BYTES` and
+an RMS silence gate in [`src/wav.js`](../src/wav.js) `rms16`) is the fallback when no streaming
+provider is available/latched — so capture never pauses. `stt.enabled === false` stops both.
+Finals push into the **ring-buffered** transcript in [`src/transcript.js`](../src/transcript.js):
+`finals` is capped at `TR_MAX_TURNS = 200` (oldest evicted), `partials` holds the live per-channel
+streaming partial, and `lastSummarizedTs` is the rolling-summary watermark. The turn shape
+`{ channel, text, ts }` is preserved so prompt formatting is unchanged.
 
 ## Provider abstraction — LLM and STT are decoupled
 
@@ -72,10 +73,23 @@ formatting is unchanged.
   needs no real key — a non-empty sentinel is used). Each provider's `streamX` attaches the
   optional screenshot to the last user turn differently; `maxTokens` is pinned to 4096
   ("effectively unlimited") because the Anthropic SDK requires a value.
-- **Speech-to-text** — [`src/stt.js`](../src/stt.js): `createSTT(settings)` is a **separate**
-  factory because Anthropic has no audio API. It builds a fallback chain from audio-capable
-  keys (OpenAI Whisper → Gemini) and falls across providers on error. A `sttDisabled` latch in
-  [`main.js`](../main.js) stops retry spam once the chain returns 403/401/`model_not_found`.
+- **Speech-to-text** — three paths behind one engine-agnostic seam:
+  - **Batch (cloud)** — [`src/stt.js`](../src/stt.js) `createSTT(settings)`, a separate factory
+    (Anthropic has no audio API); a fallback chain over audio-capable keys (OpenAI Whisper →
+    Gemini) with a `sttDisabled` latch on 403/401/`model_not_found`.
+  - **Managed local engine** — [`src/stt-process.js`](../src/stt-process.js) spawns + manages a
+    Python service ([`python/cue_stt_service.py`](../python/cue_stt_service.py)) over
+    line-delimited JSON-RPC: it creates the venv, pins deps, restarts on crash (latches after 3),
+    clean-shuts on quit. [`src/stt-engine.js`](../src/stt-engine.js) registers engines by id so
+    `main.js`/`stt-stream.js` never name one — adding whisper.cpp is one `registerEngine` call.
+    [`src/stt-models.js`](../src/stt-models.js) is the paired Node-side model list (synced with
+    the Python `MODELS`).
+  - **External server** — [`src/stt-stream.js`](../src/stt-stream.js) is a hand-rolled WebSocket
+    client to a server you run; same `{ start, sendAudio, close }` surface as the managed engine.
+- **Routing** — [`src/stt-stream.js`](../src/stt-stream.js) `resolveProvider` picks `auto` → local
+  (when its venv is ready) → external WS URL → null/batch, or `local`/`faster-whisper`/`batch`
+  forced. CLIs: `npm run stt:setup|status|models|download|delete`. See
+  [faster-whisper-setup.md](faster-whisper-setup.md).
 
 ## Feature modes & prompt composition
 
@@ -118,7 +132,9 @@ Releasing is tag-driven; see [release.md](release.md).
 ```
 main process ──┬─ overlay window (frameless, transparent, always-on-top, content-protected)
                ├─ screenshot capture (desktopCapturer)
-               ├─ speech-to-text (Whisper / Gemini)      ── "you" + "them" channels
+               ├─ speech-to-text ┬ managed local faster-whisper (spawns a Python service,
+               │                  │  JSON-RPC over stdin/stdout)   ── "you" + "them" channels
+               │                  └ external WS server / cloud Whisper-Gemini fallback
                └─ LLM streaming (OpenAI / Anthropic / Gemini / Nvidia / Ollama)
 renderer ──────┴─ the glass UI + mic capture + system-audio loopback
                         (getUserMedia / getDisplayMedia → pcm-processor → IPC)

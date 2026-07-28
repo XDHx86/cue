@@ -20,8 +20,10 @@ It is a compressed view — if it disagrees with a permanent file, that file win
 build step) that captures **screen + mic + meeting audio**, transcribes them as two
 end-to-end channels (`you` / `them`), and streams answers from a bring-your-own-key LLM
 (OpenAI / Anthropic / Gemini / Nvidia / **Ollama**). Everything runs locally except the
-provider call. The central invariant: **the three inputs stay separate and the channel tag
-preserves "who said what"** through transcript → prompt → render.
+provider call. Speech-to-text defaults to a **managed local faster-whisper** Python service —
+cue spawns it, no `pip`, no native modules (ADR-013); external WS server or cloud
+Whisper/Gemini are fallbacks. The central invariant: **the three inputs stay separate and the
+channel tag preserves "who said what"** through transcript → prompt → render.
 
 ## Where things live
 - Architecture & seams → [architecture.md](architecture.md)
@@ -37,13 +39,19 @@ preserves "who said what"** through transcript → prompt → render.
 - The roadmap & phase status → [implementation-plan.md](implementation-plan.md)
 
 ## Right now
-- Branch `feat/mvp-overhaul`, 8 commits ahead of `main`.
-- Committed: Phase 0a (re-render/ring-buffer/watchdog), 0b (Zoom z-order), 1 (`.env`),
-  6 (error normalization).
-- **In flight (uncommitted): Phase 2 — Ollama provider** (store defaults + llm switch +
-  Settings UI). Verify with `git diff`.
-- Next: finish & commit Phase 2, then Phase 3 (streaming STT — the largest phase), then
-  Phase 4 (prompt-compose seam).
+- Branch `feat/local-stt-engine`, 6 commits ahead of `main`. (Its ancestor `feat/mvp-overhaul`
+  carried the overhaul phases 0a/0b/1/2/3/5/6 into `main` first; this branch adds the
+  **managed local STT** feature.)
+- Committed on this branch (5 STT commits, `36f83af`→`e1bf887`): managed faster-whisper Python
+  service + venv bootstrap; engine-agnostic registry + streaming session + routing; Settings
+  UI + preload IPC + main wiring; `download_root` honored before any `load`; npm scripts +
+  `scripts/stt-cli.js`. Plus one Settings-panel scroll fix. **171/171 tests pass.**
+- **In flight (uncommitted): Commit 5 — docs** ([faster-whisper-setup](../../docs/faster-whisper-setup.md),
+  [README](../../README.md), architecture, ADR-013, conventions, troubleshooting, state/plan).
+  Verify with `git diff`.
+- Next: final verification + merge. After this branch the one open roadmap item is **Phase 4 —
+  prompt-compose seam** (skills · rolling memory · pre-prompt · résumé — ADR-007/009); see
+  [implementation-plan.md](implementation-plan.md).
 
 ## How to behave here
 - **Rewrite, don't append** (see [compression-policy.md](compression-policy.md)).

@@ -124,15 +124,30 @@ Prefer to keep everything on your machine? cue can talk to a **local [Ollama](ht
 2. In cue **Settings** (`⌘` `,`), pick the **Ollama** provider. No key is needed — the key field is disabled on purpose; cue treats a configured model as "ready."
 3. If your server isn't at the default, set **Ollama base URL** to its `/v1` endpoint (default `http://localhost:11434/v1`).
 
-> cue never auto-switches **to** Ollama — a running local server isn't guaranteed — so select it yourself. You can also set the base URL from your `.env` via `CUE_OLLAMA_BASE_URL`. Transcription still needs an OpenAI or Gemini key (Ollama is chat-only, same as Anthropic).
+> cue never auto-switches **to** Ollama — a running local server isn't guaranteed — so select it yourself. You can also set the base URL from your `.env` via `CUE_OLLAMA_BASE_URL`. Transcription works without any cloud key if you use the **local faster-whisper** engine (above); otherwise Ollama is chat-only, same as Anthropic, and you'll need an OpenAI or Gemini key for listening.
 
 ---
 
-## Faster transcription (optional: faster-whisper)
+## Local transcription (faster-whisper) — zero config optional
 
-By default cue transcribes in a few-second batch (OpenAI Whisper or Gemini), which has second-scale latency. For near-live transcription you can run a **local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) WebSocket server** and point cue at it: cue then streams PCM continuously, renders **partial** transcripts live, and finalizes each utterance on the server's VAD. Asking (`⌘` `↵`) answers from the *current* speaker state, mid-speech, without pausing capture.
+By default cue can transcribe **entirely on your machine** with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no audio leaves it, no OpenAI/Gemini key needed for the listening features. cue **manages the whole thing**: it creates a project-local Python virtualenv, pins the dependencies, downloads + caches a Whisper model on first use, and spawns/respawns the Python service itself. **You never run `pip` after cloning.**
 
-The setup — a reference Python server (with VAD endpoint detection) and the exact wire protocol cue speaks — is in [docs/faster-whisper-setup.md](docs/faster-whisper-setup.md). Point cue at it in **Settings** (STT provider → `faster-whisper`, endpoint `ws://localhost:9080/stream`) or via `CUE_FASTER_WHISPER_URL` in your `.env`. Unused = no change to default behavior.
+Quick start (from source):
+
+```bash
+npm install
+npm run stt:setup          # one-time: create the venv + install deps + verify
+npm run stt:download -- small   # download a model (tiny · base · small · medium · medium-large-v3 · large-v3)
+npm start
+```
+
+Then in **Settings → Speech-to-Text**, set **Transport** to `auto` (the default — prefers local, falls back to cloud if local isn't ready), pick a **Model**, and turn listening on. You can also do all of it from the Settings panel (**Prepare service**, **Download/Delete** a model) and never touch a terminal. The **Diagnostics** box shows the live service status, Python version, CUDA, active model, and last error.
+
+cue streams PCM continuously, renders **partial** transcripts live, and finalizes each utterance on the service's VAD. Asking (`⌘` `↵`) answers from the *current* speaker state, mid-speech, without pausing capture.
+
+> **Advanced:** if you already run your own faster-whisper WebSocket server, set **Transport** to `faster-whisper` and point cue at it — cue is the client. The exact wire protocol + a reference server are in [docs/faster-whisper-setup.md](docs/faster-whisper-setup.md). The engine is a pluggable seam, so a different local engine (whisper.cpp, …) can register without changing the app.
+
+CLI commands: `npm run stt:setup` · `npm run stt:status` · `npm run stt:models` · `npm run stt:download -- <model>` · `npm run stt:delete -- <model>`. Or use `CUE_STT_*` env vars (see the setup doc).
 
 ---
 
@@ -172,14 +187,15 @@ cue is an [Electron](https://www.electronjs.org/) app. Everything runs locally e
 - **Your mic ("You")** — `getUserMedia` → downsampled to 16 kHz audio → transcribed.
 - **Meeting audio ("Them")** — `getDisplayMedia` loopback capture of your system's output audio, kept on its own channel so cue knows *who* said what.
 
-Both audio streams are transcribed (OpenAI Whisper or Gemini) and fed, with an optional screenshot, to your AI model. Responses **stream** into the panel word-by-word.
+Both audio streams are transcribed — by a **managed local faster-whisper** service by default (`auto`), falling back to cloud Whisper/Gemini, or by an external server you run — and fed, with an optional screenshot, to your AI model. Responses **stream** into the panel word-by-word.
 
 **The invisibility** is a single macOS window flag: `setContentProtection(true)`, which sets `NSWindowSharingNone`. This asks the window server to exclude cue from screen-capture streams. It's the same mechanism DRM apps and Zoom's own toolbar use. It is **not** a GPU trick or a special overlay layer — and on macOS 15.4+ Apple lets some capture tools ignore it, which is why it's best-effort (see the disclaimer at the top).
 
 ```
 main process ──┬─ overlay window (frameless, transparent, always-on-top, content-protected)
                ├─ screenshot capture (desktopCapturer)
-               ├─ speech-to-text (Whisper / Gemini)      ── "You" + "Them" channels
+               ├─ speech-to-text — managed local faster-whisper (spawns a Python service),
+               │                  or external WS server, or cloud Whisper/Gemini  ── "You" + "Them" channels
                └─ LLM streaming (OpenAI / Anthropic / Gemini)
 renderer ──────┴─ the glass UI + mic capture + system-audio loopback
 ```
@@ -195,7 +211,7 @@ You probably granted an older build. Because the app is ad-hoc signed, a rebuild
 Your API key is restricted. Most often it's an OpenAI **project key that only allows chat models** — it works for screen/coding help but 403s on transcription (Whisper). Fix: enable audio/Whisper on the key, use an unrestricted key, or add a Gemini key (cue falls back to it for transcription).
 
 **Listening does nothing / no transcript.**
-Check Settings shows a transcription-capable key (OpenAI with Whisper, or Gemini). Also make sure Screen Recording is granted (meeting audio needs it).
+If you're using **local faster-whisper**, run `npm run stt:status` (or check Settings → Speech-to-Text → Diagnostics): it should say venv ready and a model cached. "venv not created" → run `npm run stt:setup`; a model missing → `npm run stt:download -- small`. If the service crashed repeatedly, Settings shows `latched` — reopen Settings or change an STT setting to reset. With the cloud path instead, check Settings shows a transcription-capable key (OpenAI with Whisper, or Gemini), and make sure Screen Recording is granted.
 
 **cue shows up in my Zoom share.**
 Set Zoom's **Screen capture mode** to *"Advanced capture with window filtering"* (see Step 3). And remember: on macOS 15.4+ this can still fail — it's best-effort.
@@ -234,7 +250,8 @@ Issues and PRs welcome. cue is intentionally small and readable — `main.js` (a
 - [ ] **Linux** (Untested)
 
 ### Features Open for Contribution
-- [ ] Upgrade audio capture pipeline for zero-latency streaming
+- [x] Local zero-latency streaming transcription (faster-whisper, managed) — built; see [docs/faster-whisper-setup.md](docs/faster-whisper-setup.md)
+- [ ] Add a second local STT engine (e.g. whisper.cpp) via the `src/stt-engine.js` registry
 - [ ] Add optional Deepgram support for ultra-fast transcription
 
 ## Credits & license

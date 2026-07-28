@@ -15,12 +15,25 @@
 not duplicate it here. Format: symptom → check → fix.
 
 ## STT / transcription
-- **Silent transcript / nothing transcribed** — (1) no audio-capable key (need OpenAI-Whisper
-  or Gemini; Anthropic has no STT); (2) macOS screen-recording grant missing (meeting audio
-  needs it); (3) OpenAI project key restricted to chat-only → 403 on Whisper. From code: check
-  the `sttDisabled` latch and the `createSTT` chain in `src/stt.js`.
-- **`handleSttError` shows a vague message** — route through `normalizeSDKError` (Phase 6) so
+- **Silent transcript / nothing transcribed** — check the transport first. With `local`/`auto`:
+  `npm run stt:status` (or Settings → Speech-to-Text → Diagnostics) — "venv not created" →
+  `npm run stt:setup`; a model missing → `npm run stt:download -- small`; `stt.enabled === false`
+  short-circuits `openStreamSessions` (no sessions, no batch loop). With cloud: no audio-capable
+  key (need OpenAI-Whisper or Gemini; Anthropic has no STT), macOS screen-recording grant missing,
+  or an OpenAI project key restricted to chat-only → 403 on Whisper. From code: check
+  `sttStreamDisabled` (stream latch) and `sttDisabled` (batch latch) in main.js, the
+  `createStreamSTT` resolver in `src/stt-stream.js`, and `createSTT` in `src/stt.js`.
+- **Model downloaded but Settings still shows it uncached** — the download didn't honor
+  `download_root`; `model_download`/`model_delete` must pass `m.getModelsDir()` (the service's
+  sticky root is unset before any `load`). `npm run stt:status` prints the cache dir.
+- **`handleSttError` shows a vague message** — route through `normalizeSDKError` so
   the status branches to the right suggestion; do not hand-roll per-status strings.
+- **STT tests spawn Python or import Electron** — `src/stt-process.js` / `src/stt-engine.js` must
+  stay param-injected ({ spawn, spawnSync, fs, getPath }); the engine session tests use a fake
+  manager answering JSON-RPC with canned results.
+- **Node candidate model list ≠ Python `MODELS`** — `src/stt-models.js:STT_MODEL_SIZES` and
+  `python/cue_stt_service.py:MODELS` drifted apart; `test/stt-models.test.js` should have caught
+  it — update both sides to match.
 
 ## Tests
 - **`npm test` fails or hangs on an `electron` import** — a tested module imported `electron`;
