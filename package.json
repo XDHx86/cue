@@ -10,7 +10,12 @@
     "test": "node --test",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --mac zip",
-    "dist:win": "electron-builder --win"
+    "dist:win": "electron-builder --win",
+    "stt:setup": "node scripts/stt-cli.js setup",
+    "stt:status": "node scripts/stt-cli.js status",
+    "stt:models": "node scripts/stt-cli.js models",
+    "stt:download": "node scripts/stt-cli.js download",
+    "stt:delete": "node scripts/stt-cli.js delete"
   },
   "build": {
     "appId": "com.cue.overlay",
