@@ -14,7 +14,7 @@
 const path = require('path');
 
 // Candidate model sizes. Kept in sync with python/cue_stt_service.py:MODELS.
-const STT_MODEL_SIZES = ['tiny', 'base', 'small', 'medium', 'medium-large-v3', 'large-v3'];
+const STT_MODEL_SIZES = ['tiny.en', 'tiny', 'base.en', 'base', 'small.en', 'small', 'medium.en', 'medium', 'large-v1', 'large-v2', 'large-v3', 'large', 'distil-large-v2', 'distil-medium.en', 'distil-small.en', 'distil-large-v3', 'large-v3-turbo', 'turbo'];
 const STT_MODEL_ORG = 'Systran'; // {org}/faster-whisper-<name>
 
 // HuggingFace hub cache layout that faster-whisper writes under download_root:

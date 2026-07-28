@@ -28,6 +28,9 @@
 const path = require('path');
 const crypto = require('crypto');
 
+const { app } = require('electron');
+const getPath = app.getPath.bind(app);
+
 const REQS_PATH = path.join(__dirname, '..', 'python', 'requirements.txt');
 const SCRIPT_PATH = path.join(__dirname, '..', 'python', 'cue_stt_service.py');
 
@@ -170,7 +173,7 @@ module.exports = {
   pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash,
   PY_CANDIDATES, MAX_SPAWN_FAILURES, HELLO_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS,
 
-  createSttProcessManager({ spawn, spawnSync, fs, getPath, log = () => {},
+  createSttProcessManager({ spawn, spawnSync, fs, log = () => {},
     setTimeout: setTimer = global.setTimeout, clearTimeout: clearTimer = global.clearTimeout }) {
     const platform = process.platform;
     let modelsDir = path.join(getPath('userData'), 'stt-models');

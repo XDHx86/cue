@@ -29,7 +29,6 @@ function getSttManager() {
       spawn: require('child_process').spawn,
       spawnSync: require('child_process').spawnSync,
       fs,
-      getPath: app.getPath,
       log: (m) => { if (DEBUG) console.log(m); },
     });
     sttManager.setModelsDir(path.join(app.getPath('userData'), 'stt-models'));
