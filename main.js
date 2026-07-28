@@ -1,6 +1,7 @@
 const DEBUG = false; // Set to false to disable debug logging
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { loadDotenv } = require('./src/env');
 // Populate process.env from .env (CUE_ENV_PATH → userData/.env → cwd/.env) BEFORE the store
 // require, so store.load()'s CUE_* override pass sees the env-supplied values. No-op if no
@@ -10,6 +11,36 @@ const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { createStreamSTT } = require('./src/stt-stream');
+// Managed local STT engine (src/stt-engine.js) backed by a spawned Python process
+// (src/stt-process.js). Lazily provisioned: the manager exists always, but it only
+// spawns Python and creates the venv when first used (openStreamSessions for 'local',
+// or an explicit Settings Prepare). Kept off the hot path so batch/external-WS users
+// never pay for it. A single instance is shared with the engine via createStreamSTT.
+const { createSttProcessManager } = require('./src/stt-process');
+const { engineMeta } = require('./src/stt-engine');
+const { scanCachedModels } = require('./src/stt-models');
+
+// Single shared STT process manager. Created lazily (app.getPath isn't safe before
+// whenReady) and cached; openStreamSessions and the Settings IPC handlers share it.
+let sttManager = null;
+function getSttManager() {
+  if (!sttManager) {
+    sttManager = createSttProcessManager({
+      spawn: require('child_process').spawn,
+      spawnSync: require('child_process').spawnSync,
+      fs,
+      getPath: app.getPath,
+      log: (m) => { if (DEBUG) console.log(m); },
+    });
+    sttManager.setModelsDir(path.join(app.getPath('userData'), 'stt-models'));
+    // Surface manager status + progress to the renderer. Status feeds the capture-stream badge
+    // (existing) and the Settings diagnostics; progress carries the one-time venv-install and
+    // model-download phases. Registered once; openStreamSessions' per-session onStatus is separate.
+    sttManager.on('status', (s) => send('stt:status', s));
+    sttManager.on('progress', (p) => send('stt:progress', p));
+  }
+  return sttManager;
+}
 const { createLLM } = require('./src/llm');
 const { MODES, RESUME_SUMMARY_PROMPT } = require('./src/prompts');
 const { composeSystem } = require('./src/prompt-compose');
@@ -187,7 +218,19 @@ function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTim
 // buffer + the renderer's transcript:partial channel. closeStreamSessions() tears it all down.
 function openStreamSessions() {
   const settings = store.getSettings();
-  const stream = createStreamSTT(settings);
+  const sttCfg = settings.stt || {};
+  // Master STT toggle (Settings → Speech-to-Text → On/Off). Off transcribes nothing: no
+  // streaming sessions and no batch flush loop, so the live PCM handlers drop audio (no buffer
+  // to drain). The badge explains why capture is silent rather than mysteriously producing
+  // nothing. Latches reset on settings:set, so toggling back on resumes on next capture.
+  if (sttCfg.enabled === false) {
+    send('stt:status', { active: false, reason: 'Speech-to-Text is off' });
+    return;
+  }
+  // 'local'/'auto-with-local-ready' engine needs the manager; the external 'faster-whisper'
+  // and 'batch' transports don't. Passed in so stt-stream resolves local readiness and builds
+  // the engine session without importing the manager itself.
+  const stream = createStreamSTT(settings, { localEngineManager: (sttCfg.provider === 'local' || sttCfg.provider === 'auto') ? getSttManager() : undefined });
   if (stream.available && !sttStreamDisabled) {
     for (const ch of ['you', 'them']) {
       const session = stream.createSession({
@@ -395,17 +438,56 @@ ipcMain.on('mic:pcm', (_e, arrayBuffer) => {
   if (!state.capturing) return;
   const pcm = Buffer.from(arrayBuffer);
   if (streamSessions.you) streamSessions.you.sendAudio(pcm);
-  else buffers.you.push(pcm);
+  else if (flushTimer) buffers.you.push(pcm);
+  // else: STT off / one channel has no session / no batch loop → drop (no undrained buffer).
 });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => {
   if (!state.capturing) return;
   const pcm = Buffer.from(arrayBuffer);
   if (streamSessions.them) streamSessions.them.sendAudio(pcm);
-  else buffers.them.push(pcm);
+  else if (flushTimer) buffers.them.push(pcm);
+  // else: STT off / one channel has no session / no batch loop → drop (no undrained buffer).
 });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
+
+// -------- managed local STT IPC (Settings) --------
+// All four go through the shared manager; it venv-bootstraps on first use. Every one is a
+// fire-and-forget-ish invoke — the renderer awaits the result to update the diagnostics
+// panel, but a hung Python never blocks capture (openStreamSessions degrades to batch).
+ipcMain.handle('stt:diagnostics', async () => {
+  const m = getSttManager();
+  // Scan the HF cache layout under userData/stt-models (src/stt-models.js) so the panel
+  // knows what's cached BEFORE the service starts — pure fs, no Python needed. The candidate
+  // list is the paired source of truth with python/cue_stt_service.py:MODELS.
+  const models = scanCachedModels(m.getModelsDir(), fs);
+  return { ...m.diagnostics(), models };
+});
+ipcMain.handle('stt:prepare', async () => {
+  const m = getSttManager();
+  // venv create + pip install + verify; phases stream over stt:progress to the panel.
+  const r = await m.ensureVenv({ onVenvProgress: (p) => send('stt:progress', { phase: p }) });
+  return r;
+});
+ipcMain.handle('stt:model:download', async (_e, model) => {
+  const m = getSttManager();
+  try {
+    if (!m.isRunning()) await m.start();
+    // The service emits progress events while the download runs (phase 'downloading' → 'done');
+    // they stream to the renderer over stt:progress via the manager listener. The handler
+    // resolves when the download completes; the renderer's click handler refreshes the scan.
+    return await m.call('model_download', { name: model });
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+ipcMain.handle('stt:model:delete', async (_e, model) => {
+  const m = getSttManager();
+  try {
+    if (!m.isRunning()) await m.start();
+    return await m.call('model_delete', { name: model });
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+ipcMain.handle('stt:engine:list', () => engineMeta());
 
 // -------- shortcuts --------
 function normalizeShortcut(accelerator) {
@@ -525,5 +607,11 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-app.on('will-quit', () => { globalShortcut.unregisterAll(); });
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  // Tear down the managed STT Python process so it never orphans on quit. `stop()`
+  // sends the service a shutdown, closes stdin, then kills after a grace — harmless
+  // if the manager was never started (no child).
+  if (sttManager) { try { sttManager.stop(); } catch { /* best-effort */ } }
+});
 app.on('window-all-closed', () => app.quit());

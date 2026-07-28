@@ -351,6 +351,130 @@
   }
   cue.on('status', ({ message }) => { cue.log('[status] ' + message); showStatus(message); });
 
+  // ---- Speech-to-Text settings (managed local engine) ---------------------
+  // Mirrors the provider/skill seg convention (.on = selected). The engine + model
+  // <select>s are data-driven: the engine list comes from the registry
+  // (src/stt-engine.js → engineMeta()), the model list from a filesystem cache scan
+  // (src/stt-models.js → stt:diagnostics). Diagnostics render into #stt-diagnostics.
+  const sttDiagEl = $('#stt-diagnostics');
+  const sttModelStatus = $('#stt-model-status');
+  let sttEngineOptions = null;   // [{id,label}] cached so fillSttSettings needn't re-fetch
+  let sttModelRows = [];         // [{name,cached}] from the last diagnostics scan
+
+  // Rebuild the model <select> from the cache scan, keeping the configured selection. A
+  // model the user configured but that no longer appears in the scan still maps if present.
+  function syncSttModelSelect() {
+    const sel = $('#stt-model');
+    const want = (settings.stt && settings.stt.local && settings.stt.local.model) || 'small';
+    sel.innerHTML = sttModelRows.length
+      ? sttModelRows.map((r) => '<option value="' + r.name + '">' + r.name + (r.cached ? ' (cached)' : '') + '</option>').join('')
+      : '<option value="">no models</option>';
+    if ([...sel.options].some((o) => o.value === want)) sel.value = want;
+  }
+
+  function renderSttDiagnostics(d) {
+    const parts = [];
+    parts.push('Service: ' + (d.status || 'stopped'));
+    parts.push('Venv ready: ' + (d.venvReady ? 'yes' : 'no'));
+    if (d.pythonVersion) parts.push('Python: ' + d.pythonVersion);
+    if (d.fasterWhisperVersion) parts.push('faster-whisper: ' + d.fasterWhisperVersion);
+    parts.push('CUDA: ' + (d.cuda ? 'available' : 'no'));
+    if (d.activeModel) parts.push('Active model: ' + d.activeModel);
+    if (d.lastError) parts.push('Last error: ' + d.lastError);
+    sttDiagEl.textContent = parts.join('\n');
+  }
+
+  async function refreshSttDiagnostics() {
+    try {
+      const d = await cue.sttDiagnostics();
+      sttModelRows = d.models || [];
+      renderSttDiagnostics(d);
+      syncSttModelSelect();
+    } catch (e) {
+      sttDiagEl.textContent = 'Diagnostics unavailable.';
+    }
+  }
+
+  // Show the External-URL field only when a transport might use it ('auto' fallback or
+  // explicit 'faster-whisper'); it's irrelevant for 'local' and 'batch'.
+  function syncSttUrlVisibility() {
+    const prov = $('#stt-provider').value;
+    const show = prov === 'auto' || prov === 'faster-whisper';
+    $('#stt-fw-url').closest('.s-field').style.display = show ? '' : 'none';
+  }
+
+  // Fills every STT control from settings, then fetches diagnostics. Called from
+  // fillSettings() (not awaited — the STT block populates a moment after the panel opens,
+  // matching the async reload-button pattern above).
+  async function fillSttSettings() {
+    const stt = settings.stt || {};
+    const loc = stt.local || {};
+    // On/Off seg: default is On (settings.stt.enabled is true unless explicitly false).
+    document.querySelectorAll('#stt-enabled-seg button').forEach((b) => b.classList.toggle('on', b.dataset.sttEnabled === (stt.enabled === false ? 'off' : 'on')));
+    $('#stt-provider').value = stt.provider || 'auto';
+    // Engine <select> is data-driven from the registry; cache so reopening Settings
+    // doesn't re-invoke the (cheap) engine:list round-trip every time.
+    const eng = $('#stt-engine');
+    if (!sttEngineOptions) {
+      try { sttEngineOptions = await cue.sttEngineList(); }
+      catch { sttEngineOptions = [{ id: 'faster-whisper', label: 'faster-whisper (local)' }]; }
+    }
+    eng.innerHTML = sttEngineOptions.map((e) => '<option value="' + e.id + '">' + e.label + '</option>').join('');
+    eng.value = stt.engine || 'faster-whisper';
+    $('#stt-compute').value = loc.computeType || 'int8';
+    $('#stt-language').value = loc.language || 'auto';
+    document.querySelectorAll('#stt-device-seg button').forEach((b) => b.classList.toggle('on', b.dataset.device === (loc.device || 'auto')));
+    document.querySelectorAll('#stt-vad-seg button').forEach((b) => b.classList.toggle('on', b.dataset.vad === (loc.vad === false ? 'off' : 'on')));
+    $('#stt-fw-url').value = stt.fasterWhisperURL || '';
+    syncSttUrlVisibility();
+    // The model <select> is populated by refreshSttDiagnostics() (it owns the cache scan);
+    // no early sync here to avoid a 'no models' flash before the scan returns.
+    await refreshSttDiagnostics();
+  }
+
+  // Seg button handlers — toggle .on within each seg (matches the provider/skill segs).
+  ['stt-enabled-seg', 'stt-device-seg', 'stt-vad-seg'].forEach((id) => {
+    document.querySelectorAll('#' + id + ' button').forEach((b) => b.addEventListener('click', () => {
+      document.querySelectorAll('#' + id + ' button').forEach((x) => x.classList.toggle('on', x === b));
+    }));
+  });
+  // Transport change only toggles the External-URL field's visibility; the segs above
+  // handle their own .on state.
+  $('#stt-provider').addEventListener('change', syncSttUrlVisibility);
+
+  // Model management: prepare (venv) / download / delete. Each updates the inline status
+  // hint and refreshes diagnostics + the model select so cached flags stay current. A
+  // download can take minutes on a first fetch — live phases arrive over stt:progress.
+  $('#stt-prepare').addEventListener('click', async () => {
+    sttModelStatus.textContent = 'Preparing…';
+    const r = await cue.sttPrepare();
+    sttModelStatus.textContent = (r && r.ok) ? 'Service ready' : ('Prepare failed' + (r && r.error ? ': ' + r.error : ''));
+    await refreshSttDiagnostics();
+  });
+  $('#stt-model-download').addEventListener('click', async () => {
+    const name = $('#stt-model').value;
+    if (!name) { sttModelStatus.textContent = 'Select a model first.'; return; }
+    sttModelStatus.textContent = 'Downloading… (see diagnostics)';
+    const r = await cue.sttModelDownload(name);
+    sttModelStatus.textContent = (r && r.model) ? ('Downloaded ' + r.model) : ('Download failed' + (r && r.error ? ': ' + r.error : ''));
+    await refreshSttDiagnostics();
+  });
+  $('#stt-model-delete').addEventListener('click', async () => {
+    const name = $('#stt-model').value;
+    if (!name) { sttModelStatus.textContent = 'Select a model first.'; return; }
+    sttModelStatus.textContent = 'Deleting…';
+    const r = await cue.sttModelDelete(name);
+    sttModelStatus.textContent = (r && r.deleted) ? ('Deleted ' + (r.model || name)) : ('Delete failed' + (r && r.error ? ': ' + r.error : ''));
+    await refreshSttDiagnostics();
+  });
+
+  // venv-install + model-download phases nudge the inline status hint live. The 'done'
+  // phase clears it; the managing handler above sets the final "Downloaded/Deleted …"
+  // text and refreshes the cache scan — no redundant diagnostics fetch here.
+  cue.on('stt:progress', ({ phase }) => {
+    sttModelStatus.textContent = (phase && phase !== 'done') ? phase : '';
+  });
+
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
   function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
@@ -385,6 +509,7 @@
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     syncAssistShortcutLabels();
     $('#s-status').textContent = statusText();
+    fillSttSettings();
   }
   $('#clear-resume').addEventListener('click', async () => {
     $('#resume-context').value = '';
@@ -445,6 +570,27 @@
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
+    // Speech-to-Text: read every STT control back into settings before persisting. The segs
+    // use .on (the same convention as the provider/skill segs); selects read .value.
+    const sttOn = [...document.querySelectorAll('#stt-enabled-seg button.on')].map((b) => b.dataset.sttEnabled)[0] === 'on';
+    const sttDevice = [...document.querySelectorAll('#stt-device-seg button.on')].map((b) => b.dataset.device)[0] || 'auto';
+    const sttVad = [...document.querySelectorAll('#stt-vad-seg button.on')].map((b) => b.dataset.vad)[0] !== 'off';
+    settings.stt = {
+      ...(settings.stt || {}),
+      enabled: sttOn,
+      provider: $('#stt-provider').value,
+      engine: $('#stt-engine').value || 'faster-whisper',
+      fasterWhisperURL: $('#stt-fw-url').value.trim(),
+      deepgramURL: (settings.stt && settings.stt.deepgramURL) || '',
+      model: (settings.stt && settings.stt.model) || '', // OpenAI batch model — untouched namespace
+      local: {
+        model: $('#stt-model').value || 'small',
+        device: sttDevice,
+        computeType: $('#stt-compute').value || 'int8',
+        language: $('#stt-language').value || 'auto',
+        vad: sttVad,
+      },
+    };
     await cue.settingsSet(settings);
   }
 
