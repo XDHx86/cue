@@ -2,6 +2,9 @@
 const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
+// Default assistant-style option id (src/prompt-registry.js owns the templates now); needed here
+// only for the one-time legacy prePrompt migration fallback. The registry is the live source.
+const { DEFAULT_PRE_PROMPT_TEMPLATE } = require('./prompt-registry');
 
 const FILE = path.join(app.getPath('userData'), 'cue-data.json');
 
@@ -14,10 +17,11 @@ const DEFAULTS = {
   // by main.js when resumeContext changes (settings:set); empty until then → summary tier falls
   // back to the full résumé.
   resumeSummary: '',
-  // System-prompt composition (src/prompt-compose.js). prePrompt is free-form custom instructions
-  // (set when the "Custom" template is selected); prePromptTemplate picks a built-in when it isn't.
-  prePrompt: '',
-  prePromptTemplate: 'concise',
+  // System-prompt overrides (src/prompt-registry.js). settings.promptOverrides[id] holds the
+  // user's DELTA over the registry defaults — resolveField(id, settings) picks override-or-default.
+  // Restore-default writes the empty sentinel ('' for 'text', { option, text:'' } for 'select'),
+  // NOT a key deletion: deepMerge never deletes, so the sentinel is how "back to default" persists.
+  promptOverrides: {},
   // Skills (src/skills.js): .claude/skills/*.md under skillDir, applied as behavioral guidance.
   // skillEnabled is the secondary gate — no skillDir set means no skills injected regardless.
   skillDir: '',
@@ -93,6 +97,23 @@ function load() {
       data.stt.model = data.sttModel;
     }
     delete data.sttModel;
+  }
+
+  // One-time migration: older cue stored the assistant-style selection at top-level `prePrompt`
+  // (custom text) + `prePromptTemplate` (selected built-in id, or 'custom'). Move both into the
+  // new `promptOverrides.prePrompt` home used by src/prompt-registry.js, only synthesizing a value
+  // when the new slot is empty (a hand-set override wins). The legacy keys are scrubbed either way
+  // so there is a single source after the next save. Runs before env overrides (none of these are
+  // env-controlled). Idempotent: on a migrated-on-disk install the legacy keys are already gone.
+  if (data.prePrompt !== undefined || data.prePromptTemplate !== undefined) {
+    const po = data.promptOverrides || (data.promptOverrides = {});
+    if (!po.prePrompt) {
+      const tpl = data.prePromptTemplate;
+      const custom = typeof data.prePrompt === 'string' ? data.prePrompt : '';
+      po.prePrompt = { option: tpl || DEFAULT_PRE_PROMPT_TEMPLATE, text: custom };
+    }
+    delete data.prePrompt;
+    delete data.prePromptTemplate;
   }
 
   // Apply CUE_* env-var overrides (populated by src/env.js before this require resolves).

@@ -41,8 +41,11 @@ function getSttManager() {
   return sttManager;
 }
 const { createLLM } = require('./src/llm');
-const { MODES, RESUME_SUMMARY_PROMPT } = require('./src/prompts');
+const { MODES } = require('./src/prompts');
 const { composeSystem } = require('./src/prompt-compose');
+// Configurable prompt registry (ADR-014): the renderer fetches registrySpec() to build its prompt
+// controls, and the compose seams resolve per-mode / summary prompts through resolveField().
+const { resolveField, registrySpec } = require('./src/prompt-registry');
 const { createMemoryRunner } = require('./src/memory');
 const { loadSkillDir, clearSkillCache } = require('./src/skills');
 const { transcriptState, pushFinal, setPartial, clearPartial, liveTranscriptForPrompt, getFinals } = require('./src/transcript');
@@ -325,6 +328,10 @@ async function runFeature(mode, userText) {
   try {
     const settings = store.getSettings();
     const llm = createLLM(settings);
+    // The user's per-mode system-prompt override (Settings → Prompts) replaces def.system when set.
+    // resolveField falls back to MODES[mode].system (the registry default IS that string), so with
+    // no override effDef.system === def.system — a no-op (ADR-014).
+    const effDef = { ...def, system: resolveField('mode.' + mode, settings) || def.system };
     const userBubble = def.userBubble !== null ? def.userBubble : (mode === 'ask' ? userText : null);
     if (DEBUG) console.log('[DEBUG MAIN] LLM settings loaded:', { provider: settings.provider, smart: settings.smart });
     send('llm:start', { userBubble, small: !!def.small });
@@ -355,7 +362,7 @@ async function runFeature(mode, userText) {
     if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
     armWatchdog();
     const fullText = await llm.stream({
-      system: composeSystem({ def, settings, memoryState: memoryRunner }),
+      system: composeSystem({ def: effDef, settings, memoryState: memoryRunner }),
       turns: [{ role: 'user', text: built }],
       imageDataUrl,
       onToken: (t) => { armWatchdog(); send('llm:token', { text: t }); }
@@ -389,8 +396,10 @@ async function regenerateResumeSummary() {
     if (!resume) return;
     const llm = createLLM(settings);
     if (!llm.ready) return;
+    // The résumé-digest prompt is user-overridable (Settings → Prompts); resolveField falls back to
+    // RESUME_SUMMARY_PROMPT (the registry default) when no override is set (ADR-014).
     const digest = await llm.stream({
-      system: RESUME_SUMMARY_PROMPT,
+      system: resolveField('resumeSummaryPrompt', settings),
       turns: [{ role: 'user', text: resume }],
       imageDataUrl: null,
       onToken: () => {}, // accumulate silently — no renderer tokens for a background digest
@@ -577,12 +586,16 @@ app.whenReady().then(() => {
   // Rolling-summary compaction runner. The watermark IS transcriptState.lastSummarizedTs (src/
   // transcript.js exposes it for memory.js to advance), so this module advances it through the
   // injected accessors rather than owning its own. The summarize call reuses createLLM with the
-  // MEMORY_SUMMARY_PROMPT system prompt (src/memory.js imports it from prompts.js); tokens are
-  // accumulated into the full text and never surfaced to the renderer (onToken is a no-op).
+  // compaction system prompt from the injected getSystemPrompt() — default MEMORY_SUMMARY_PROMPT,
+  // overridable from Settings (ADR-014); tokens are accumulated into the full text and never
+  // surfaced to the renderer (onToken is a no-op).
   memoryRunner = createMemoryRunner({
     getFinals: () => getFinals(),
     getWatermark: () => transcriptState.lastSummarizedTs,
     setWatermark: (ts) => { transcriptState.lastSummarizedTs = ts; },
+    // Rolling-summary compaction prompt is user-overridable (Settings → Prompts); falls back to
+    // MEMORY_SUMMARY_PROMPT via resolveField (ADR-014). A pure closure over store → registry.
+    getSystemPrompt: () => resolveField('memorySummaryPrompt', store.getSettings()),
     summarize: async ({ system, userMessage }) => {
       const settings = store.getSettings();
       const llm = createLLM(settings);

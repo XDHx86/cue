@@ -15,7 +15,8 @@ const DEBUG = false;
 //   - its own `summarizing` latch — NEVER touches state.busy. A compaction call is invisible to
 //     the feature runner and to streaming UI tokens; a hung summary cannot block an assist, and an
 //     assist never waits on a summary.
-//   - the compaction call accumulates the full text (MEMORY_SUMMARY_PROMPT is the system prompt);
+//   - the compaction call accumulates the full text; the system prompt comes from the injected
+//     getSystemPrompt() (default MEMORY_SUMMARY_PROMPT, overridable from Settings per ADR-014);
 //     it does NOT stream tokens to the renderer.
 //
 // Pure-Node + electron-free: the LLM call, persistence path, finals, and the watermark accessors
@@ -83,6 +84,10 @@ function appendSummary(existing, batchSummary) {
 //                                     don't need electron or the SDK. main wires it to createLLM.
 //   filePath              → cue-memory.json path (null skips persistence entirely)
 //   intervalMs            → override the loop cadence (testing)
+//   getSystemPrompt()     → the compaction system prompt; default () => MEMORY_SUMMARY_PROMPT.
+//                           main injects () => resolveField('memorySummaryPrompt', settings) so
+//                           the user's edit in Settings takes effect (ADR-014). Pure accessor →
+//                           tests stay electron/SDK-free and electron-free by default.
 function createMemoryRunner(deps) {
   const getFinals = deps.getFinals || (() => []);
   const getWatermark = deps.getWatermark || (() => 0);
@@ -90,6 +95,7 @@ function createMemoryRunner(deps) {
   const summarize = deps.summarize || (async () => '');
   const filePath = deps.filePath || null;
   const intervalMs = typeof deps.intervalMs === 'number' ? deps.intervalMs : SUMMARY_INTERVAL_MS;
+  const getSystemPrompt = deps.getSystemPrompt || (() => MEMORY_SUMMARY_PROMPT);
 
   let summary = '';
   let summarizing = false; // overlap guard — never touches state.busy
@@ -129,7 +135,7 @@ function createMemoryRunner(deps) {
       const userMessage = buildSummaryUserMessage(finals, watermark, summary);
       let result;
       try {
-        result = await summarize({ system: MEMORY_SUMMARY_PROMPT, userMessage });
+        result = await summarize({ system: getSystemPrompt(), userMessage });
       } catch (e) {
         // A failed compaction does NOT advance the watermark — those turns will be retried on the
         // next tick once the provider is healthy. The latch is released in the finally below.

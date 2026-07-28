@@ -20,28 +20,19 @@ const DEBUG = false;
 
 const { loadSkillDir } = require('./skills');
 const { composeResumeSection } = require('./profile-context');
+// Pre-prompt templates + the configurable-prompt resolver live in src/prompt-registry.js now (the
+// single home for user-configurable prompt templates). resolvePrePrompt delegates to the registry so
+// composeSystem stays decoupled from the override storage shape — see resolveField('prePrompt', …).
+const { resolveField, PRE_PROMPT_TEMPLATES, DEFAULT_PRE_PROMPT_TEMPLATE } = require('./prompt-registry');
 
 const MAX_NOTES_CHARS = 4000;
 const MAX_MEMORY_SUMMARY_CHARS = 2000; // bound of the rolling summary (matches MEMORY_SUMMARY_PROMPT)
 
-// Built-in pre-prompt templates. The settings UI offers these as a selector plus a Custom text;
-// the resolution rule in resolvePrePrompt picks the effective pre-prompt.
-const DEFAULT_PRE_PROMPT_TEMPLATE = 'concise';
-const PRE_PROMPT_TEMPLATES = {
-  concise: 'You are my discreet copilot. Be terse and direct: no preamble, no hedging.',
-  interview: 'You are my interview coach. Anticipate tough questions and help me answer them calmly and concretely.',
-  engineer: 'You are a senior engineer pairing with me. Call out bad ideas; optimize for correctness and clarity over cleverness.',
-  copilot: 'You are a friendly meeting copilot. Help me follow the discussion and chime in helpfully and on time.',
-};
-
-// Effective pre-prompt = the user's custom text if set, else the text of the selected template
-// (defaulting to "concise" when the template id is unset or unknown — a forward-compat fallback).
+// Effective pre-prompt. The precedence (custom text → edited built-in → selected template → default)
+// is implemented once in the prompt-registry resolver; this thin wrapper keeps the existing call site
+// (composeSystem) and the unit tests on the seam they already know.
 function resolvePrePrompt(settings) {
-  const s = settings || {};
-  const custom = typeof s.prePrompt === 'string' ? s.prePrompt.trim() : '';
-  if (custom) return custom;
-  const id = PRE_PROMPT_TEMPLATES[s.prePromptTemplate] ? s.prePromptTemplate : DEFAULT_PRE_PROMPT_TEMPLATE;
-  return PRE_PROMPT_TEMPLATES[id];
+  return resolveField('prePrompt', settings);
 }
 
 // Skills injected as INSTRUCTIONS. Opt-out gate (settings.skillEnabled === false); an empty or
