@@ -117,7 +117,7 @@ function resolveField(id, settings) {
     const text = (typeof o.text === 'string' ? o.text : '').trim();
     if (text) return text;
     const opt = (o.option && field.options[o.option]) ? o.option : field.defaultOption;
-    return field.options[opt] || '';
+    return (field.options[opt] && field.options[opt].text) || '';
   }
   const t = typeof ov === 'string' ? ov.trim() : '';
   return t || field.default || '';

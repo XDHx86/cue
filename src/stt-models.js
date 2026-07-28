@@ -14,7 +14,11 @@
 const path = require('path');
 
 // Candidate model sizes. Kept in sync with python/cue_stt_service.py:MODELS.
-const STT_MODEL_SIZES = ['tiny.en', 'tiny', 'base.en', 'base', 'small.en', 'small', 'medium.en', 'medium', 'large-v1', 'large-v2', 'large-v3', 'large', 'distil-large-v2', 'distil-medium.en', 'distil-small.en', 'distil-large-v3', 'large-v3-turbo', 'turbo'];
+// NOTE: only the six sizes below are offered. The Python service resolves every name with a naive
+// `Systran/faster-whisper-<name>` repo map (hf_repo), so a wider catalog (distil-*, large, turbo,
+// the *.en variants) cannot be added HERE without either 404'd downloads or a repo-map change on
+// the Python side. This list and Python's MODELS are paired by test/stt-models.test.js — change both.
+const STT_MODEL_SIZES = ['tiny', 'base', 'small', 'medium', 'medium-large-v3', 'large-v3'];
 const STT_MODEL_ORG = 'Systran'; // {org}/faster-whisper-<name>
 
 // HuggingFace hub cache layout that faster-whisper writes under download_root:

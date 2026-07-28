@@ -28,8 +28,20 @@
 const path = require('path');
 const crypto = require('crypto');
 
-const { app } = require('electron');
-const getPath = app.getPath.bind(app);
+// Electron's app.getPath is resolved lazily (on first use), NOT at module load, so this module can
+// be `require`d by the pure-Node test suite without crashing: outside Electron `require('electron')`
+// returns the binary path string (not { app }), so `app.getPath` would throw at load. Tests inject a
+// fake `getPath` into createSttProcessManager and never touch this; the production caller (main.js)
+// runs inside Electron, where `require('electron')` returns the real { app }. This preserves the
+// param-injection invariant (per .claude/docs/conventions.md) — code is electron-free for tests.
+let _boundGetPath;
+function defaultGetPath(name) {
+  if (!_boundGetPath) {
+    const { app } = require('electron');
+    _boundGetPath = app.getPath.bind(app);
+  }
+  return _boundGetPath(name);
+}
 
 const REQS_PATH = path.join(__dirname, '..', 'python', 'requirements.txt');
 const SCRIPT_PATH = path.join(__dirname, '..', 'python', 'cue_stt_service.py');
@@ -173,7 +185,7 @@ module.exports = {
   pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash,
   PY_CANDIDATES, MAX_SPAWN_FAILURES, HELLO_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS,
 
-  createSttProcessManager({ spawn, spawnSync, fs, log = () => {},
+  createSttProcessManager({ spawn, spawnSync, fs, getPath = defaultGetPath, log = () => {},
     setTimeout: setTimer = global.setTimeout, clearTimeout: clearTimer = global.clearTimeout }) {
     const platform = process.platform;
     let modelsDir = path.join(getPath('userData'), 'stt-models');

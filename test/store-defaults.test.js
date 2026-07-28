@@ -110,15 +110,51 @@ test('migrates a legacy top-level sttModel into stt.model and drops the old key'
 
 // ---- phase-4 composition defaults (pre-prompt, skills, memory, résumé digest) ----
 
-test('composition defaults exist: prePrompt, prePromptTemplate, skillDir, skillEnabled, memory.notes, resumeSummary', () => {
+test('composition defaults exist: promptOverrides, skillDir, skillEnabled, memory.notes, resumeSummary', () => {
   const s = store.getSettings();
-  assert.equal(s.prePrompt, '', 'custom pre-prompt default empty (a built-in template is used)');
-  assert.equal(s.prePromptTemplate, 'concise', 'default template is concise direct');
+  // prePrompt/prePromptTemplate left DEFAULTS in the prompt-registry migration (their live home is
+  // now promptOverrides.prePrompt; the registry owns the built-in templates). The override slot is
+  // empty so the effective pre-prompt is the registry default, resolved through resolveField.
+  assert.equal(s.prePrompt, undefined, 'legacy top-level prePrompt is gone (now promptOverrides.prePrompt)');
+  assert.equal(s.prePromptTemplate, undefined, 'legacy top-level prePromptTemplate is gone');
+  assert.ok(s.promptOverrides && typeof s.promptOverrides === 'object', 'promptOverrides block exists');
+  assert.equal(s.promptOverrides.prePrompt, undefined, 'no prePrompt override by default → registry default applies');
   assert.equal(s.skillDir, '', 'no project dir set by default → no skills injected');
   assert.equal(s.skillEnabled, true, 'skills on by default (the dir gate makes this a no-op until a dir is set)');
   assert.ok(s.memory && typeof s.memory === 'object', 'memory block exists');
   assert.equal(s.memory.notes, '', 'user notes default empty');
   assert.equal(s.resumeSummary, '', 'digest empty until the first regenerate-on-save run');
+});
+
+test('migrates legacy top-level prePrompt/prePromptTemplate into promptOverrides.prePrompt and drops the old keys', () => {
+  // A returning user whose cue-data.json still has the Phase-4 top-level prePrompt (custom text) +
+  // prePromptTemplate ('custom', the synthetic selection). Both move into the new promptOverrides
+  // home used by src/prompt-registry.js, so resolveField('prePrompt') returns the user's custom text.
+  fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({
+    prePrompt: 'my custom lead', prePromptTemplate: 'custom',
+  }));
+  delete require.cache[require.resolve('../src/store')];
+  store = require('../src/store');
+  const s = store.getSettings();
+  assert.deepEqual(s.promptOverrides.prePrompt, { option: 'custom', text: 'my custom lead' },
+    'legacy prePrompt/prePromptTemplate folded into the override slot');
+  assert.equal(s.prePrompt, undefined, 'legacy prePrompt key gone after migration');
+  assert.equal(s.prePromptTemplate, undefined, 'legacy prePromptTemplate key gone after migration');
+  // The compose seam reads the new home; the effective pre-prompt is the migrated custom text.
+  const { resolveField } = require('../src/prompt-registry');
+  assert.equal(resolveField('prePrompt', s), 'my custom lead', 'effective pre-prompt is the migrated custom text');
+
+  // A user-set promptOverrides.prePrompt is NOT overwritten by a stale legacy prePrompt (a hand-set
+  // override wins). The legacy keys are still scrubbed so there is a single source after the save.
+  fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({
+    prePrompt: 'stale legacy', prePromptTemplate: 'custom',
+    promptOverrides: { prePrompt: { option: 'interview', text: 'my kept lead' } },
+  }));
+  delete require.cache[require.resolve('../src/store')];
+  store = require('../src/store');
+  const s2 = store.getSettings();
+  assert.equal(s2.promptOverrides.prePrompt.text, 'my kept lead', 'a hand-set override wins over the stale legacy prePrompt');
+  assert.equal(s2.prePrompt, undefined, 'legacy keys scrubbed even when the override was kept');
 });
 
 test('memory.notes merges cleanly with a persisted notes value (deepMerge does not drop it)', () => {

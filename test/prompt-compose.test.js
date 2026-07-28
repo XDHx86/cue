@@ -14,7 +14,7 @@ const { clearSkillCache } = require('../src/skills');
 function mkDef(over = {}) {
   return { system: 'MODE-SYSTEM-MARKER', wantsResume: true, small: false, ...over };
 }
-function before(a, b, s) { return s.indexOf(a) < s.indexOf(b) && s.indexOf(b) > -1; }
+function before(a, b, s) { return s.indexOf(a) > -1 && s.indexOf(b) > -1 && s.indexOf(a) < s.indexOf(b); }
 
 // ---- ordering: pre-prompt → mode → skills → memory → résumé ----
 
@@ -27,7 +27,7 @@ test('composeSystem concatenates the five sections in the fixed order when all a
       '---\nname: zebra\ndescription: stripes\n---\nDo zebra things.', 'utf8');
 
     const settings = {
-      prePrompt: 'PRE-MARKER',
+      promptOverrides: { prePrompt: { option: 'custom', text: 'PRE-MARKER' } },
       skillEnabled: true,
       skillDir: root,
       memory: { notes: 'NOTES-MARKER' },
@@ -75,10 +75,15 @@ test('composeSystem returns "" without a def', () => {
 // ---- pre-prompt resolution ----
 
 test('resolvePrePrompt: custom text wins; else the selected template; else the default', () => {
-  assert.equal(resolvePrePrompt({ prePrompt: '  be brief  ' }), 'be brief');
-  assert.equal(resolvePrePrompt({ prePrompt: '' }), PRE_PROMPT_TEMPLATES[DEFAULT_PRE_PROMPT_TEMPLATE]);
-  assert.equal(resolvePrePrompt({ prePromptTemplate: 'interview' }), PRE_PROMPT_TEMPLATES.interview);
-  assert.equal(resolvePrePrompt({ prePromptTemplate: 'no-such' }), PRE_PROMPT_TEMPLATES[DEFAULT_PRE_PROMPT_TEMPLATE]);
+  // Custom text wins over any selected template (trimmed).
+  assert.equal(resolvePrePrompt({ promptOverrides: { prePrompt: { option: 'custom', text: '  be brief  ' } } }), 'be brief');
+  // An edited built-in template also wins via non-empty text.
+  assert.equal(resolvePrePrompt({ promptOverrides: { prePrompt: { option: 'interview', text: 'my own interview lead' } } }), 'my own interview lead');
+  // Empty text → the selected option's default text.
+  assert.equal(resolvePrePrompt({ promptOverrides: { prePrompt: { option: 'interview', text: '' } } }), PRE_PROMPT_TEMPLATES.interview);
+  // Empty text + unknown/missing option → the default template.
+  assert.equal(resolvePrePrompt({ promptOverrides: { prePrompt: { option: 'no-such', text: '' } } }), PRE_PROMPT_TEMPLATES[DEFAULT_PRE_PROMPT_TEMPLATE]);
+  // No override at all → the default template.
   assert.equal(resolvePrePrompt({}), PRE_PROMPT_TEMPLATES[DEFAULT_PRE_PROMPT_TEMPLATE]);
 });
 
@@ -146,7 +151,7 @@ test('the résumé section appears only when wantsResume is true, and never for 
 test('sections are joined with a blank line, never run together', () => {
   const out = composeSystem({
     def: { system: 'SYSTEM', wantsResume: false },
-    settings: { prePrompt: 'PRE' },
+    settings: { promptOverrides: { prePrompt: { option: 'custom', text: 'PRE' } } },
     memoryState: {},
   });
   assert.ok(out.indexOf('PRE\n\nSYSTEM') > -1, 'pre-prompt and mode separated by \\n\\n');
