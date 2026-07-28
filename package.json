@@ -20,7 +20,8 @@
       "main.js",
       "preload.js",
       "src/**/*",
-      "renderer/**/*"
+      "renderer/**/*",
+      "python/**/*"
     ],
     "mac": {
       "target": [

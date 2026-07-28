@@ -1,0 +1,9 @@
+# cue local Speech-to-Text service — pinned. Installed into a project-local venv
+# (userData/stt-venv) by src/stt-process.js, never into node_modules, so ADR-003
+# (no native *Node* modules) still holds. CUDA torch is an opt-in manual step —
+# described in docs/faster-whisper-setup.md — NOT installed here, because the
+# CUDA wheel set is platform/GPU-specific and silently breaking the "users never
+# run pip manually" promise is worse than an honest diagnostics line.
+faster-whisper==1.1.1
+webrtcvad==2.0.10
+numpy==1.26.4
