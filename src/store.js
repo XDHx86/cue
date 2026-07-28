@@ -40,15 +40,26 @@ const DEFAULTS = {
   // Ollama base URL — `ollama serve` exposes an OpenAI-compatible /v1 endpoint. Empty falls
   // back to http://localhost:11434/v1 in llm.js. Set via Settings or CUE_OLLAMA_BASE_URL.
   ollama: { baseURL: '' },
-  // Speech-to-text streaming/lifecycle config. `provider` is 'auto' (pick the first streaming
-  // provider whose URL/key is configured, else fall back to batch createSTT), 'faster-whisper'
-  // (force the local WS server), or 'batch' (force the legacy flush loop). fasterWhisperURL
-  // defaults to '' (NOT a localhost URL) so 'auto' resolves to batch for the majority of users
-  // who don't run a local server — otherwise every capture would burn 3 connect failures before
-  // latching. Users who run faster-whisper enable it via Settings or CUE_FASTER_WHISPER_URL.
+  // Speech-to-text streaming/lifecycle config. `provider` is the TRANSPORT selector:
+  //   'auto' (prefer the managed local engine when ready, else the external WS server if a
+  //   URL is set, else batch), 'local' (force the managed Python engine), 'faster-whisper'
+  // (the external WS server the user runs themselves), or 'batch' (the legacy flush loop).
+  // `enabled` is the master STT toggle; `engine` selects the LOCAL engine (future-proof: a
+  // second engine like whisper.cpp registers in src/stt-engine.js and appears here). The
+  // `local.*` block configures the managed engine — kept separate from `stt.model`, which is
+  // the OpenAI Whisper model name for the *batch* fallback path.
   stt: {
     provider: 'auto',
-    fasterWhisperURL: '',
+    enabled: true,                 // master STT toggle (Settings)
+    engine: 'faster-whisper',      // local engine selector — registry in src/stt-engine.js
+    local: {                       // managed engine config (src/stt-process.js + python/)
+      model: 'small',              // faster-whisper model size: tiny|base|small|medium|large-v3
+      device: 'auto',              // auto|cpu|cuda (auto → cuda if available else cpu)
+      computeType: 'int8',         // int8|int8_float16|float16|float32 (CPU default int8)
+      language: 'auto',            // BCP-47 code or 'auto' (null over the wire → detect)
+      vad: true,                    // webrtcvad endpoint detection during streaming
+    },
+    fasterWhisperURL: '',          // external (user-run) WS server; '' → not configured
     deepgramURL: 'wss://api.deepgram.com/v1/listen',
     model: '' // OpenAI Whisper model name for the batch path (default 'whisper-1' in stt.js)
   }
@@ -115,6 +126,13 @@ const ENV_OVERRIDES = {
   CUE_OLLAMA_API_KEY: ['apiKeys', 'ollama'],
   CUE_OLLAMA_BASE_URL: ['ollama', 'baseURL'],
   CUE_STT_PROVIDER: ['stt', 'provider'],
+  CUE_STT_ENABLED: ['stt', 'enabled'],
+  CUE_STT_ENGINE: ['stt', 'engine'],        // local engine selector (not under stt.local)
+  CUE_STT_LOCAL_MODEL: ['stt', 'local', 'model'],
+  CUE_STT_LOCAL_DEVICE: ['stt', 'local', 'device'],
+  CUE_STT_LOCAL_COMPUTE: ['stt', 'local', 'computeType'],
+  CUE_STT_LOCAL_LANGUAGE: ['stt', 'local', 'language'],
+  CUE_STT_LOCAL_VAD: ['stt', 'local', 'vad'],
   CUE_FASTER_WHISPER_URL: ['stt', 'fasterWhisperURL'],
   CUE_DEEPGRAM_URL: ['stt', 'deepgramURL']
 };

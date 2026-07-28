@@ -108,6 +108,45 @@ test("createStreamSTT returns null session for a non-streaming provider", () => 
   assert.equal(s.createSession(), null);
 });
 
+// ---- the managed 'local' transport (src/stt-engine.js via a fake manager) ----
+
+test("resolveProvider 'local' → available iff the manager reports the venv ready", () => {
+  // readiness is a hint passed in (not read from disk) so the resolver stays pure.
+  assert.deepEqual(resolveProvider({ stt: { provider: 'local' } }, { localReady: true }), { provider: 'local', available: true });
+  assert.deepEqual(resolveProvider({ stt: { provider: 'local' } }, { localReady: false }), { provider: 'local', available: false });
+});
+
+test("resolveProvider 'auto' prefers the managed local engine when ready, before the external WS URL", () => {
+  // localReady wins over a configured external URL — the managed engine is local-first.
+  const withBoth = resolveProvider({ stt: { provider: 'auto', fasterWhisperURL: 'ws://x:9' } }, { localReady: true });
+  assert.deepEqual(withBoth, { provider: 'local', available: true });
+  // without readiness, auto falls back to the external WS server (today's behavior).
+  const withUrl = resolveProvider({ stt: { provider: 'auto', fasterWhisperURL: 'ws://x:9' } }, { localReady: false });
+  assert.deepEqual(withUrl, { provider: 'faster-whisper', available: true });
+});
+
+test("auto with no URL and no readiness still → null/batch (today's default behavior)", () => {
+  assert.deepEqual(resolveProvider({ stt: { provider: 'auto' } }, { localReady: false }), { provider: null, available: false });
+});
+
+test("createStreamSTT 'local' builds an engine session via the wired manager; null without one", () => {
+  const s = createStreamSTT(
+    { stt: { provider: 'local', engine: 'faster-whisper', local: { model: 'small', vad: true } } },
+    { localEngineManager: { isVenvReady: () => true } },
+  );
+  assert.equal(s.available, true);
+  // createEngineSession('faster-whisper', {manager, ...}) builds a LocalFasterWhisperSession.
+  const ses = s.createSession({ channel: 'you', onStatus: () => {}, onError: () => {} });
+  assert.ok(ses && typeof ses.start === 'function' && typeof ses.sendAudio === 'function', 'a streaming session');
+  // With no manager wired in, the local engine degrades to null (→ batch in main).
+  const s2 = createStreamSTT(
+    { stt: { provider: 'local', engine: 'faster-whisper', local: { model: 'small' } } },
+    { localEngineManager: { isVenvReady: () => false } },
+  );
+  assert.equal(s2.available, false);
+  assert.equal(s2.createSession({ channel: 'you' }), null);
+});
+
 // ---- integration: a real loopback WS server + a faster-whisper session ----
 
 // A minimal WS server built on net + the exported framing helpers. It completes the handshake,

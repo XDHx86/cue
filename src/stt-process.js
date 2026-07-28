@@ -93,6 +93,13 @@ class RpcChannel {
     if (obj.m) this._onEvent(obj);
   }
   feedLineStr(line) { this.feedLine(parseJsonLine(line)); }
+  // Fire-and-forget: write a request with no id (the service runs it but sends no
+  // response). Used for the hot audio path — ~16 messages/s/channel — so we never
+  // accumulate pending promises waiting on a reply that won't come.
+  notify(method, params = {}) {
+    try { this._send(encodeJsonLine({ m: method, ...params })); }
+    catch { /* a closed stdin surfaces via the child 'exit' path, not here */ }
+  }
   rejectAll(err) {
     for (const entry of this._pending.values()) {
       if (entry.timer) clearTimeout(entry.timer);
@@ -362,6 +369,11 @@ module.exports = {
       return channel.request(method, params, opts || {});
     }
 
+    function notify(method, params = {}) {
+      if (!running) return;
+      channel.notify(method, params);
+    }
+
     function stop() {
       stopping = true;
       latched = false;
@@ -389,9 +401,9 @@ module.exports = {
     function setLastLoad(l) { lastLoad = l; }
 
     return {
-      ensureVenv, start, ensureRunning, stop, call, on, diagnostics,
+      ensureVenv, start, ensureRunning, stop, call, notify, on, diagnostics,
       setLastLoad, getLastLoad, setModelsDir, getModelsDir,
-      isRunning: () => running, isLatched: () => latched,
+      isRunning: () => running, isLatched: () => latched, isVenvReady: () => !!venv,
       // test-only escape hatches
       _channel: channel, _onExit: onExit, _feedStdout: onStdout,
       _setVenv(v) { venv = v; }, _setChild(c) { child = c; }, _setRunning(v) { running = v; },

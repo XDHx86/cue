@@ -280,30 +280,54 @@ class FasterWhisperStreamSession {
 }
 
 // Resolve which streaming provider (if any) applies, per settings.stt.provider.
-function resolveProvider(settings) {
+//
+// 'local' = the managed in-process Python engine (src/stt-engine.js, backed by the
+// src/stt-process.js manager). It is preferred over the external WS server in 'auto'
+// when the manager reports its venv ready — local-first, matching the "local
+// faster-whisper first" ordering the batch path already uses. The readiness hint is
+// passed in (not read from disk) so this resolver stays pure and testable without a
+// live process; defaults to false so 'auto' with no setup stays null→batch (today's
+// behavior for the majority of users who run nothing local).
+function resolveProvider(settings, { localReady = false } = {}) {
   const cfg = settings.stt || {};
   const want = cfg.provider || 'auto';
   const fwUrl = cfg.fasterWhisperURL || '';
+  if (want === 'local') return { provider: 'local', available: localReady };
   if (want === 'faster-whisper') return { provider: 'faster-whisper', available: !!fwUrl };
   if (want === 'deepgram') return { provider: 'deepgram', available: false }; // streaming not implemented → batch fallback
   if (want === 'batch') return { provider: 'batch', available: false };
-  // 'auto'
+  // 'auto' — local managed engine first, then the external WS server, else batch.
+  if (localReady) return { provider: 'local', available: true };
   if (fwUrl) return { provider: 'faster-whisper', available: true };
   return { provider: null, available: false }; // nothing streaming → batch fallback in main
 }
 
-function createStreamSTT(settings) {
-  const { provider, available } = resolveProvider(settings);
+function createStreamSTT(settings, { localEngineManager } = {}) {
+  const { provider, available } = resolveProvider(settings, { localReady: !!(localEngineManager && localEngineManager.isVenvReady && localEngineManager.isVenvReady()) });
   return {
     available,
     provider,
     createSession({ channel, language, onFinal, onPartial, onError, onStatus } = {}) {
-      if (provider !== 'faster-whisper') return null; // batch/deepgram have no streaming session here
-      return new FasterWhisperStreamSession({
-        url: settings.stt.fasterWhisperURL,
-        language,
-        onFinal, onPartial, onError, onStatus,
-      });
+      if (!available) return null;
+      if (provider === 'local') {
+        // src/stt-engine.js hosts the registry + the faster-whisper engine impl. It is
+        // required lazily so the engine registry (and its manager dependency) isn't pulled
+        // into the batch-only / external-WS code paths — keeping them as they are today.
+        const { createEngineSession } = require('./stt-engine');
+        const engineName = (settings.stt && settings.stt.engine) || 'faster-whisper';
+        return createEngineSession(engineName, {
+          manager: localEngineManager, channel, language,
+          onFinal, onPartial, onError, onStatus, settings,
+        });
+      }
+      if (provider === 'faster-whisper') {
+        return new FasterWhisperStreamSession({
+          url: settings.stt.fasterWhisperURL,
+          language,
+          onFinal, onPartial, onError, onStatus,
+        });
+      }
+      return null; // batch/deepgram have no streaming session here
     },
   };
 }

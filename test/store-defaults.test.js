@@ -67,6 +67,31 @@ test('stt defaults to auto with an empty fasterWhisperURL (batch fallback) and a
   assert.equal(s.stt.model, '', 'stt.model default empty → stt.js uses whisper-1');
 });
 
+test('stt has a managed local-engine block (enabled + engine + local.*) separate from stt.model', () => {
+  const s = store.getSettings();
+  // enabled: master toggle; engine: local engine selector (registry in stt-engine.js)
+  assert.equal(s.stt.enabled, true, 'STT enabled by default');
+  assert.equal(s.stt.engine, 'faster-whisper', 'default local engine is faster-whisper');
+  assert.ok(s.stt.local && typeof s.stt.local === 'object', 'stt.local block exists');
+  assert.equal(s.stt.local.model, 'small', 'small is the CPU/local sweet spot');
+  assert.equal(s.stt.local.device, 'auto', 'auto → cuda if available else cpu');
+  assert.equal(s.stt.local.computeType, 'int8', 'CPU default compute type');
+  assert.equal(s.stt.local.language, 'auto', 'auto-detect by default');
+  assert.equal(s.stt.local.vad, true, 'VAD endpoint detection on by default');
+  // the OpenAI Whisper batch model name lives at stt.model — distinct from stt.local.model
+  assert.notEqual(s.stt.local.model, s.stt.model, 'local model and batch model are separate namespaces');
+});
+
+test('stt.local merges cleanly with a persisted value (deepMerge does not drop it)', () => {
+  store.setSettings({ stt: { local: { model: 'large-v3', device: 'cuda' } } });
+  const s = store.getSettings();
+  assert.equal(s.stt.local.model, 'large-v3');
+  assert.equal(s.stt.local.device, 'cuda');
+  // untouched local fields survive the partial merge
+  assert.equal(s.stt.local.computeType, 'int8');
+  assert.equal(s.stt.local.vad, true);
+});
+
 test('migrates a legacy top-level sttModel into stt.model and drops the old key', () => {
   // Simulate a returning user whose cue-data.json still has the pre-Phase-3 top-level sttModel.
   fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({ sttModel: 'whisper-1' }));
