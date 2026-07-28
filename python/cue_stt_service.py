@@ -247,12 +247,19 @@ class Service:
         return {}
 
     # -- model cache management ------------------------------------------
-    def _cache_dir(self, name):
-        if not self.download_root:
+    # `download_root` is sticky once `load` sets it, but a model_download/delete may arrive
+    # BEFORE any load (the Settings Download button, or the CLI, never load first). Each
+    # method accepts an explicit download_root that overrides the sticky one; the host always
+    # passes userData/stt-models so the cache lives where the Settings scan + CLI look.
+    def _cache_dir(self, name, download_root=None):
+        root = download_root or self.download_root
+        if not root:
             return None
-        return os.path.join(self.download_root, f"models--{ORG}--faster-whisper-{name}")
+        return os.path.join(root, f"models--{ORG}--faster-whisper-{name}")
 
-    def models_list(self):
+    def models_list(self, download_root=None):
+        if download_root:
+            self.download_root = download_root
         cached = []
         for name in MODELS:
             d = self._cache_dir(name)
@@ -261,8 +268,10 @@ class Service:
         return {"models": cached, "active": self.model_name,
                 "download_root": self.download_root}
 
-    async def model_download(self, name):
+    async def model_download(self, name, download_root=None):
         from faster_whisper import WhisperModel  # type: ignore
+        if download_root:
+            self.download_root = download_root
         emit("progress", phase="downloading", model=name, pct=None)
         # instantiate into the cache dir (downloads if missing; cache hit otherwise)
         dev, ct = self._resolve_device("cpu", "int8")
@@ -272,8 +281,8 @@ class Service:
         emit("progress", phase="done", model=name, pct=100)
         return {"model": name}
 
-    def model_delete(self, name):
-        d = self._cache_dir(name)
+    def model_delete(self, name, download_root=None):
+        d = self._cache_dir(name, download_root)
         if not d or not os.path.isdir(d):
             return {"deleted": False, "error": "not cached"}
         if self.model_name == name:
@@ -448,9 +457,9 @@ async def dispatch(svc, method, p):
     if method == "stream_stop":
         return svc.stream_stop(p.get("sid"))
     if method == "model_download":
-        return await svc.model_download(p.get("name"))
+        return await svc.model_download(p.get("name"), p.get("download_root"))
     if method == "model_delete":
-        return svc.model_delete(p.get("name"))
+        return svc.model_delete(p.get("name"), p.get("download_root"))
     if method == "models_list":
         return svc.models_list()
     if method == "diagnostics":

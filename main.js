@@ -474,17 +474,16 @@ ipcMain.handle('stt:model:download', async (_e, model) => {
   const m = getSttManager();
   try {
     if (!m.isRunning()) await m.start();
-    // The service emits progress events while the download runs (phase 'downloading' → 'done');
-    // they stream to the renderer over stt:progress via the manager listener. The handler
-    // resolves when the download completes; the renderer's click handler refreshes the scan.
-    return await m.call('model_download', { name: model });
+    // download_root pins the cache to userData/stt-models (where scanCachedModels looks), so a
+    // download works even before any load sets the service's sticky root (Settings-only flow).
+    return await m.call('model_download', { name: model, download_root: m.getModelsDir() });
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 ipcMain.handle('stt:model:delete', async (_e, model) => {
   const m = getSttManager();
   try {
     if (!m.isRunning()) await m.start();
-    return await m.call('model_delete', { name: model });
+    return await m.call('model_delete', { name: model, download_root: m.getModelsDir() });
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 ipcMain.handle('stt:engine:list', () => engineMeta());
