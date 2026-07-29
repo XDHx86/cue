@@ -58,6 +58,10 @@ const SCRIPT_PATH = path.join(__dirname, '..', 'python', 'cue_stt_service.py');
 const MAX_SPAWN_FAILURES = 3;
 const HELLO_TIMEOUT_MS = 8000;
 const DEFAULT_CALL_TIMEOUT_MS = 15000;
+// Re-load after an unexpected restart: the model is already cached (local_files_only=true in
+// the last logged load params), so a cached load is seconds — bound it. The first-load download
+// is handled by the engine (src/stt-engine.js) BEFORE load, never here.
+const MODEL_RELOAD_TIMEOUT_MS = 120000;
 const SHUTDOWN_GRACE_MS = 1000;
 
 // ---- pure JSON <-> line framing (testable without a process) ------------
@@ -405,8 +409,10 @@ module.exports = {
         log.info({ python: diag.pythonVersion, faster_whisper: diag.fasterWhisperVersion,
                    cuda: diag.cuda }, 'stt service started');
         if (lastLoad) {
-          // a restart mid-session: re-load the last model and resume streaming sids
-          try { await channel.request('load', lastLoad, { timeout: 0 }); }
+          // a restart mid-session: re-load the last (cached) model so streaming sids can resume.
+          // Finite timeout — the cache is local, so this is seconds, and a stuck reload must not
+          // pin the service forever (it latches via onExit's failure path on a hung load).
+          try { await channel.request('load', lastLoad, { timeout: MODEL_RELOAD_TIMEOUT_MS }); }
           catch (e) { log.error({ error: e && e.message }, 're-load after restart failed'); }
         }
         for (const cb of listeners.status) {

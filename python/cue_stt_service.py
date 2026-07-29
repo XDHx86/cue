@@ -185,20 +185,29 @@ class Service:
         return dev, ct
 
     async def load(self, name, device="auto", compute_type="auto", language=None,
-                   vad=True, download_root=None):
+                   vad=True, download_root=None, local_files_only=False):
+        """Load a model into memory.
+
+        ``local_files_only`` is the load's contract with the host: the host downloads
+        the model first (via ``model_download``, which emits progress), then loads it
+        with ``local_files_only=True`` so a ``load`` can NEVER block on a silent
+        network download (the old root cause of the "local STT hangs forever" symptom —
+        ``local_files_only=False`` downloaded silently with no progress events, and
+        the host gave the call an infinite ``timeout:0``). A cached ``local_files_only``
+        load is fast and bounded; a missing cache surfaces a real, actionable error.
+        """
         from faster_whisper import WhisperModel  # type: ignore
         self.download_root = download_root or self.download_root
         dev, ct = self._resolve_device(device, compute_type)
-        log.bind(model=name, device=dev, compute_type=ct,
-                 cuda=self.cuda).info("model loading")
+        log.bind(model=name, device=dev, compute_type=ct, cuda=self.cuda,
+                 cache_only=bool(local_files_only)).info("model loading")
         t0 = time.monotonic()
         try:
-            # Load off the loop — it can download on first use, which blocks.
             model = await asyncio.to_thread(
                 WhisperModel, name, device=dev, compute_type=ct,
-                download_root=self.download_root, local_files_only=False)
+                download_root=self.download_root, local_files_only=local_files_only)
         except Exception:
-            log.bind(model=name, device=dev).exception("model load failed")
+            log.bind(model=name, device=dev, cache_only=bool(local_files_only)).exception("model load failed")
             raise
         self.model = model
         self.model_name = name
@@ -487,7 +496,8 @@ async def dispatch(svc, method, p):
     if method == "load":
         return await svc.load(p.get("name"), p.get("device", "auto"),
                               p.get("compute_type", "auto"), p.get("language"),
-                              p.get("vad", True), p.get("download_root"))
+                              p.get("vad", True), p.get("download_root"),
+                              p.get("local_files_only", False))
     if method == "unload":
         return svc.unload()
     if method == "transcribe":

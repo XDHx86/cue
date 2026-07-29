@@ -21,7 +21,11 @@ const { createSttProcessManager } = require('./src/stt-process');
 // shared console + rotating-file root once (idempotent); the manager + the stream STT both derive
 // module-scoped children from it; stopSttLogger() flushes the transport on quit. Created lazily
 // (app.getPath isn't safe before whenReady) so the batch/external-WS paths never pay for it.
-const { getSttLogger, stopSttLogger } = require('./src/stt-logger');
+const { getSttLogger, sttChild, stopSttLogger } = require('./src/stt-logger');
+// Module-scoped structured logger for main's STT lifecycle (console → npm terminal + dated file,
+// ADR-014). Lazily resolved: getSttLogger() needs store settings, so first use defers until then.
+let sttLog = null;
+function mainSttLog() { return sttLog || (sttLog = sttChild('main-stt')); }
 const { engineMeta } = require('./src/stt-engine');
 const { scanCachedModels } = require('./src/stt-models');
 
@@ -98,6 +102,11 @@ let memoryRunner = null;
 const FLUSH_MS = 3500;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.6); // ~0.6s
 const RMS_GATE = 240;
+// STT flush watchdog (D4/D5). The LLM path has a 30s idle watchdog; STT had none, so a hung
+// cloud transcribe call pinned `state.transcribing[ch]=true` forever — every later flush no-oped
+// and the channel went permanently, silently dead (the literal "timeout that never resolves").
+// A single transcribe must return within this bound or the lock is released + the error surfaced.
+const STT_TRANSCRIBE_TIMEOUT_MS = 30000;
 let flushTimer = null;
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
@@ -181,6 +190,7 @@ async function flushChannel(channel) {
   if (rms16(pcm) < RMS_GATE) return; // silence gate
 
   state.transcribing[channel] = true;
+  let watchdog = null;
   try {
     const settings = store.getSettings();
     const stt = createSTT(settings);
@@ -188,7 +198,20 @@ async function flushChannel(channel) {
       if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper) or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
       return;
     }
-    const res = await stt.transcribe(pcm);
+    // Wrap the cloud transcribe in an explicit per-call timeout (D4/D5) so a hung SDK call can
+    // NEVER pin the channel lock forever. Resolves to a timeout-shaped error the chain already
+    // handles (handleSttError surfaces it). Mirrors runFeature's 30s idle watchdog.
+    let res;
+    try {
+      res = await Promise.race([
+        stt.transcribe(pcm),
+        new Promise((_, reject) => {
+          watchdog = setTimeout(
+            () => reject({ timeout: true, message: 'Transcription timed out after ' + (STT_TRANSCRIBE_TIMEOUT_MS / 1000) + 's', provider: stt.providers.join('/') }),
+            STT_TRANSCRIBE_TIMEOUT_MS);
+        }),
+      ]);
+    } finally { if (watchdog) clearTimeout(watchdog); }
     if (res.error) {
       handleSttError(res.error, settings);
       return;
@@ -196,24 +219,31 @@ async function flushChannel(channel) {
     if (res.text && res.text.trim()) {
       const turn = { channel, text: res.text.trim(), ts: Date.now() };
       pushFinal(turn);
-      if (DEBUG) console.log(`[TRANSCRIPT] ${channel === 'you' ? 'You' : 'Them'}:`, turn.text);
+      mainSttLog().debug({ channel }, 'transcript', turn.text);
       send('transcript', turn);
     }
   } catch (e) {
-    console.log('[stt] error', e && e.message);
+    // A timeout (no `status`: the race's reject) OR a thrown SDK error. Surface it as an
+    // actionable, provider-specific status instead of swallowing it into a console.log (D6) —
+    // a silent swallow was the "mysterious no transcription" symptom.
+    handleSttError(e, store.getSettings());
   } finally {
+    if (watchdog) clearTimeout(watchdog);
     state.transcribing[channel] = false;
   }
 }
 
 function handleSttError(err, settings) {
-  const ne = normalizeSDKError(err, err && err.provider);
-  console.log('[stt] error', ne.provider, ne.status, ne.code, ne.message);
+  const isTimeout = err && err.timeout;
+  const ne = normalizeSDKError(isTimeout ? { message: err.message } : err, err && err.provider);
+  mainSttLog().warn({ provider: ne.provider, status: ne.status, code: ne.code, timeout: !!isTimeout }, 'stt error');
   if (sttDisabled) return;
   const noAccess = ne.status === 401 || ne.status === 403 || ne.code === 'model_not_found';
   sttDisabled = true; // stop hammering the API every few seconds; reset on settings:set
   if (noAccess) {
     send('status', { message: 'Transcription off: your ' + ne.provider + ' key has no access to a speech-to-text model. ' + ne.suggestion + ' Screen + LeetCode still work; fix the key and reopen Settings to re-enable listening.' });
+  } else if (isTimeout) {
+    send('status', { message: 'Transcription timed out (' + ne.provider + ') — check your network or use a local whisper engine in Settings. ' + ne.suggestion });
   } else {
     send('status', { message: 'Transcription error (' + ne.provider + '): ' + ne.suggestion });
   }
@@ -224,6 +254,44 @@ function startFlushLoop() {
   flushTimer = setInterval(() => { flushChannel('you'); flushChannel('them'); }, FLUSH_MS);
 }
 function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTimer = null; } }
+
+// D3 — degrade a single channel whose streaming session failed/latched mid-capture to the batch
+// flush loop, in the SAME capture session (not just the next toggle). Drops the session so the
+// live PCM handlers route to the batch buffer, and starts the loop if it isn't already draining.
+// The other channel keeps its streaming session; only the failed channel degrades.
+function degradeChannelToBatch(ch) {
+  if (streamSessions[ch]) { try { streamSessions[ch].close(); } catch {} streamSessions[ch] = null; }
+  startFlushLoop();
+}
+
+// D9 — auto-prepare the local Python venv on first capture when the user chose 'local' but the
+// venv isn't ready yet. Reuses the same ensureVenv the Settings "Prepare" button calls; phases
+// stream to the renderer over stt:progress. Failing that (e.g. no Python 3.10+ on PATH), surface
+// an actionable status instead of silently transcribing nothing. Fire-and-forget + re-entrant
+// guard so a rapid capture toggle can't start two bootstraps.
+let _localPrepInFlight = false;
+async function autoPrepareLocalVenv() {
+  if (_localPrepInFlight) return;
+  _localPrepInFlight = true;
+  const m = getSttManager();
+  if (m.isVenvReady()) { _localPrepInFlight = false; return; }
+  send('stt:status', { active: false, starting: true, reason: 'Preparing Python environment (one-time)…' });
+  try {
+    const r = await m.ensureVenv({ onVenvProgress: (p) => send('stt:progress', { phase: p }) });
+    if (r && r.ok && state.capturing) {
+      // Venv is ready — re-open streaming sessions so the now-available local engine picks up
+      // live capture without forcing the user to toggle listening off and on.
+      mainSttLog().info('local venv prepared on first capture; reopening streaming sessions');
+      openStreamSessions();
+    } else if (!r || !r.ok) {
+      send('stt:status', { active: false, reason: r && r.error ? r.error : 'Local STT setup failed. Install Python 3.10+ and retry, or use a cloud provider in Settings.' });
+    }
+  } catch (e) {
+    send('stt:status', { active: false, reason: 'Local STT setup failed: ' + ((e && e.message) || 'unknown') + '. Install Python 3.10+ or use a cloud provider in Settings.' });
+  } finally {
+    _localPrepInFlight = false;
+  }
+}
 
 // -------- streaming STT pipeline --------
 // On capture start, openStreamSessions() picks streaming mode (a faster-whisper WS session per
@@ -248,6 +316,12 @@ function openStreamSessions() {
     localEngineManager: (sttCfg.provider === 'local' || sttCfg.provider === 'auto') ? getSttManager() : undefined,
     logger: getSttLogger(settings),
   });
+  // D9 — 'local' chosen but the venv isn't ready yet: kick the one-time bootstrap (progress
+  // surfaced) instead of silently transcribing nothing. The batch loop below still starts if a
+  // cloud key exists so capture isn't dead while Python sets up; when prep completes it re-opens.
+  if (!stream.available && sttCfg.provider === 'local' && !sttStreamDisabled) {
+    autoPrepareLocalVenv();
+  }
   if (stream.available && !sttStreamDisabled) {
     for (const ch of ['you', 'them']) {
       const session = stream.createSession({
@@ -257,20 +331,29 @@ function openStreamSessions() {
           const turn = { channel: ch, text, ts: ts || Date.now() };
           pushFinal(turn);                 // ring buffer (capped at TR_MAX_TURNS)
           clearPartial(ch);               // the live partial is now finalized — clear the cell
-          if (DEBUG) console.log(`[TRANSCRIPT] ${ch === 'you' ? 'You' : 'Them'}:`, text);
+          mainSttLog().debug({ channel: ch }, 'transcript', text);
           send('transcript', turn);        // finalized turn → renderer strip (Phase 3c)
         },
         onPartial: ({ text, ts }) => {
           setPartial(ch, text);            // live per-channel partial for Ctrl+Alt+A (Phase 3d)
           send('transcript:partial', { channel: ch, text, ts: ts || Date.now() });
         },
-        onError: (e) => { if (DEBUG) console.log('[stt-stream]', ch, e && e.message); },
+        onError: (e) => { mainSttLog().warn({ channel: ch, error: e && e.message }, 'stt-stream error'); },
         onStatus: (s) => {
           if (s.active) {
             send('stt:status', { active: true, provider: s.provider, channel: ch });
+          } else if (s.starting) {
+            // Local engine warm-up (venv spawn → model download → load → stream_start). The
+            // channel is ramping, not failed — show "starting" but keep buffering via sendAudio
+            // (the session holds a bounded pre-sid ring until sid is set, D2).
+            send('stt:status', { active: false, starting: true, reason: s.reason || 'starting', channel: ch });
           } else {
-            // Session latched (3 connect failures). Latch globally so a re-toggle uses batch
-            // instead of hammering the dead server; reset on settings:set (a config change).
+            // Session latched or failed mid-capture (D3): instead of silently dropping audio for
+            // this channel until a re-toggle, drop the session NOW so the `mic:pcm`/`system:pcm`
+            // handlers fall back to the batch buffer, and start the flush loop to drain it. The
+            // global latch stays so a re-toggle doesn't hammer the dead engine again.
+            mainSttLog().warn({ channel: ch, reason: s.reason }, 'streaming session failed mid-capture; degrading to batch');
+            degradeChannelToBatch(ch);
             sttStreamDisabled = true;
             send('stt:status', { active: false, reason: s.reason || 'streaming unavailable', channel: ch });
           }

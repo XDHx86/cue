@@ -33,6 +33,20 @@ function createEngineSession(name, opts) {
 
 // Map engine id → { label } for the Settings engine selector (data-driven, future-proof).
 const ENGINE_META = { 'faster-whisper': { label: 'faster-whisper (local)' } };
+
+// Finite bounds for the local engine's start sequence. The previous design gave `load` an
+// INFINITE timeout (timeout:0) and let it download silently (local_files_only=False) — a stuck
+// or slow HuggingFace fetch blocked stream_start forever (sid never set, every PCM chunk
+// silently dropped): the literal "local STT hangs forever" symptom. Now the host downloads
+// first (with progress), then loads from the cache with a finite timeout. A cached load is
+// seconds, so the bound is generous; a download of a multi-GB large model can take many minutes
+// on a slow link, so the download bound is long but still finite (the host surfaces progress).
+const MODEL_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min — bounded; host shows progress
+const MODEL_LOAD_TIMEOUT_MS = 120 * 1000;          // cached load only — seconds, bound for safety
+// Audio buffered while `sid` is null (warm-up: venv spawn + hello + download + load + stream_start).
+// ~2s of 16kHz mono Int16: enough that speech said during a *fast* cached load isn't lost while
+// keeping the ring small. A long first-download drops the tail past this window (unavoidable).
+const PRE_SID_BYTES = Math.floor(16000 * 2 * 2);
 function engineMeta() {
   return [...engines.keys()].map((id) => ({ id, ...(ENGINE_META[id] || { label: id }) }));
 }
@@ -52,6 +66,7 @@ class LocalFasterWhisperSession {
     this._unsubs = [];
     this._closed = false;
     this._starting = false;
+    this._preSid = [];                 // bounded ring of Int16 chunks captured before `sid` was set
   }
 
   _loadParams() {
@@ -63,7 +78,37 @@ class LocalFasterWhisperSession {
       language: this.language,
       vad: cfg.vad !== false,
       download_root: this.manager.getModelsDir(),
+      // Cache-only load: the host pre-downloads via model_download (which emits progress), so
+      // load() can NEVER block on a silent network fetch — the old infinite-timeout hang.
+      local_files_only: true,
     };
+  }
+
+  // Cheap filesystem check (the Python service's models_list is an os.path.isdir scan, no model
+  // load). Best-effort: on any error we return true so the caller falls through to a normal load
+  // (which would then surface the real error rather than spinning an unneeded download).
+  async _isObjectCached(params) {
+    try {
+      const res = await this.manager.call('models_list', { download_root: params.download_root });
+      const hit = ((res && res.models) || []).find((m) => m && m.name === params.name);
+      return !!(hit && hit.cached);
+    } catch { return true; }
+  }
+
+  // Buffer audio captured while `sid` is null (warm-up). A bounded ring of ~2s so speech said
+  // during a fast cached load isn't lost — the long first-download drops its own tail past the cap
+  // (unavoidable), but at least audio isn't *silently* dropped with zero feedback.
+  _bufferPreSid(buf) {
+    this._preSid.push(buf);
+    let total = 0; for (const b of this._preSid) total += b.length;
+    while (total > PRE_SID_BYTES && this._preSid.length > 1) total -= this._preSid.shift().length;
+  }
+  _flushPreSid() {
+    if (!this.sid || this._closed || !this._preSid.length) { this._preSid = []; return; }
+    const merged = Buffer.concat(this._preSid);
+    this._preSid = [];
+    // base64 over the JSON pipe: 33% overhead at 16kHz mono ≈ 42 KB/s localhost — negligible.
+    this.manager.notify('stream_audio', { sid: this.sid, pcm_b64: merged.toString('base64') });
   }
 
   async start() {
@@ -81,7 +126,17 @@ class LocalFasterWhisperSession {
       const params = this._loadParams();
       const last = this.manager.getLastLoad();
       if (!last || JSON.stringify(last) !== JSON.stringify(params)) {
-        await this.manager.call('load', params, { timeout: 0 }); // model download can take minutes
+        // Decouple DOWNLOAD from LOAD (root cause of the "local hangs forever" timeout):
+        // download first via model_download (which emits progress to the renderer), THEN load from
+        // the cache with a finite timeout. load() therefore never stalls on a silent network fetch.
+        if (!(await this._isObjectCached(params))) {
+          if (this.onStatus) this.onStatus({ active: false, starting: true, reason: 'preparing model (' + params.name + ') — downloading…' });
+          await this.manager.call('model_download',
+            { name: params.name, download_root: params.download_root },
+            { timeout: MODEL_DOWNLOAD_TIMEOUT_MS });
+        }
+        if (this.onStatus) this.onStatus({ active: false, starting: true, reason: 'loading model (' + params.name + ')…' });
+        await this.manager.call('load', params, { timeout: MODEL_LOAD_TIMEOUT_MS });
         this.manager.setLastLoad(params);
       }
       const start = await this.manager.call('stream_start', { language: this.language, vad: params.vad });
@@ -109,6 +164,7 @@ class LocalFasterWhisperSession {
           this.onStatus({ active: false, reason: e.reason || 'service unavailable' });
         }
       }));
+      this._flushPreSid(); // ship any audio captured while warming up
       if (this.onStatus) this.onStatus({ active: true, provider: 'faster-whisper' });
     } catch (e) {
       if (this.onError) this.onError(e);
@@ -119,13 +175,14 @@ class LocalFasterWhisperSession {
   }
 
   sendAudio(int16Buffer) {
-    if (!this.sid || this._closed || !this.manager) return;
-    // base64 over the JSON pipe: 33% overhead at 16kHz mono ≈ 42 KB/s localhost — negligible.
+    if (this._closed || !this.manager) return;
+    if (!this.sid) { this._bufferPreSid(int16Buffer); return; } // warm-up: keep a bounded tail
     this.manager.notify('stream_audio', { sid: this.sid, pcm_b64: Buffer.from(int16Buffer).toString('base64') });
   }
 
   async close() {
     this._closed = true;
+    this._preSid = [];
     for (const u of this._unsubs) { try { u(); } catch {} }
     this._unsubs = [];
     if (this.sid) { try { await this.manager.call('stream_stop', { sid: this.sid }); } catch {} }
@@ -141,4 +198,5 @@ registerEngine('faster-whisper', (opts) => {
 module.exports = {
   registerEngine, listEngines, hasEngine, createEngineSession, engineMeta,
   LocalFasterWhisperSession,
+  MODEL_DOWNLOAD_TIMEOUT_MS, MODEL_LOAD_TIMEOUT_MS, PRE_SID_BYTES,
 };

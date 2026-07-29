@@ -15,7 +15,8 @@
     "stt:status": "node scripts/stt-cli.js status",
     "stt:models": "node scripts/stt-cli.js models",
     "stt:download": "node scripts/stt-cli.js download",
-    "stt:delete": "node scripts/stt-cli.js delete"
+    "stt:delete": "node scripts/stt-cli.js delete",
+    "stt:test-providers": "node scripts/stt-test-providers.js"
   },
   "build": {
     "appId": "com.cue.overlay",
