@@ -112,3 +112,43 @@ expose the same `{ start, sendAudio, close }` + partial/final surface to `stt-st
 default (CUDA is an opt-in manual step) so `npm install` never pulls the CUDA stack.
 **Alternatives rejected:** a native whisper binding in cue (native module); ship a bundled Python
 (repackaging); route the managed engine through the WS client (two transports, one surface wins).
+
+## ADR-014 — Centralized STT logging: Pino (Node) + Loguru (Python) — implemented
+**Decision:** a shared structured logger (`src/stt-logger.js`, Pino singleton) for the Node STT
+lifecycle, and Loguru (`python/cue_stt_logging.py`) for the Python service. Console → stderr (fd
+2, so it appears in the `npm` terminal, stdout stays the JSON-RPC protocol) + a rotating dated
+file under `userData/logs`. Python stderr is one JSON line per record, parsed by the manager and
+forwarded through Pino at the matching level (levels survive the process boundary). Config in
+`settings.stt.logging` with `CUE_STT_LOG_*` runtime overrides (never persisted).
+**Rationale:** STT failures were untraceable — `console.log` only, no levels/timestamps/files;
+the Python service's stderr was free-form. Structured logs make "why did transcription hang"
+answerable. Param-injected so tests spawn no Pino transport.
+**Alternatives rejected:** `electron-log` (native-ish dep, not STT-scoped); raw `console` per file
+(no levels/rotation/tracebacks); writing Python logs to a separate file Node can't read.
+
+## ADR-016 — No silent STT timeouts: download/load decoupled + finite bounds — implemented
+**Decision:** (1) the local engine *downloads* a model (`model_download`, emits progress) *then*
+*loads* it with `local_files_only=true` under a finite timeout — `load` can never block on a silent
+network fetch; (2) the batch/cloud `transcribe` is wrapped in a 30s watchdog that releases the
+channel lock + surfaces an actionable error; (3) a streaming session that fails mid-capture
+degrades its channel to the batch loop in-session; (4) `provider:'local'` with the venv unready
+auto-prepares it on first capture.
+**Rationale:** every transcription failure previously presented as an infinite, silent "timeout"
+— `load` ran at `timeout:0` and downloaded silently (sid never set, PCM dropped); the batch path
+had no timeout (a hung SDK call pinned `state.transcribing[ch]` forever); latched sessions dropped
+audio until a re-toggle; and 'local' with no venv transcribed nothing. These were root-cause
+structural defects, not timeout-tuning problems.
+**Alternatives rejected:** increasing timeouts (treats the symptom, the hang is silent either way);
+giving up on the local engine (the whole point of ADR-013); dropping the batch path (cloud is the
+fallback when local is unavailable).
+
+## ADR-015 — Retire the `.env` system into the Store — decided (Phase 8)
+**Decision:** remove `src/env.js` and the `CUE_*` runtime-override path; all config (incl. API
+secrets) already lives in the Store (`src/store.js` `apiKeys`). Reverses ADR-012's dependency-free
+`.env` precedent, so this ADR is the required logged decision per CLAUDE.md governance.
+**Rationale:** the `.env` system is no longer needed — the Store owns all settings, and the `CUE_*`
+env path is a redundant seeding layer. Removing it simplifies the boot path and one less config
+surface. A one-time import of an existing `userData/.env` seeds the Store on first boot post-change.
+**Status:** decided; implementation deferred to Phase 8 so P1/P2 don't add new `CUE_*` consumers
+that would have to be re-migrated. **Alternatives rejected:** keep `.env` as a pure convenience
+seeder (redundant with the Store; two config surfaces breeds drift).

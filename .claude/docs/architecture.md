@@ -74,10 +74,14 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
   pure (readiness is a passed-in hint) so it tests without a process.
 - **Engine seam** — [src/stt-engine.js](../../src/stt-engine.js): `registerEngine/listEngines/
   createEngineSession/engineMeta`. The faster-whisper engine self-registers; its
-  `LocalFasterWhisperSession` bridges `{ start, sendAudio, close }` onto the manager's JSON-RPC
-  (load if not active → stream_start → sid → forward per-sid partial/final → stream_stop). Adding
-  a second local engine (whisper.cpp) is one `registerEngine` call implementing that surface —
-  **main.js and stt-stream.js never name an engine**.
+  `LocalFasterWhisperSession` bridges `{ start, sendAudio, close }` onto the manager's JSON-RPC.
+  `start()` **downloads the model first** (`model_download`, which emits progress) when not
+  cached, **then loads with `local_files_only=true`** under a finite timeout, then `stream_start`
+  → sid → forward per-sid partial/final → `stream_stop`. Load is cache-only so it can never stall
+  on a silent network fetch (the old infinite-timeout hang). Audio captured before `sid` is set is
+  held in a bounded ~2s pre-sid ring and flushed on first `sendAudio`. Adding a second local engine
+  (whisper.cpp) is one `registerEngine` call implementing that surface — **main.js and stt-stream.js
+  never name an engine**.
 - **Managed process** — [src/stt-process.js](../../src/stt-process.js): `createSttProcessManager`
   owns the Python lifecycle: `ensureVenv()` (idempotent, hash-pinned reinstall), `start()` (spawn
   + hello handshake), `call`/`notify` (correlated JSON-RPC; `notify` is fire-and-forget for the
@@ -96,6 +100,12 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
   `stt:diagnostics` (cache scan + manager.diagnostics()), `stt:prepare` (venv bootstrap), and
   `stt:model:download`/`stt:engine:list`; the model-download/delete handlers pass `download_root`
   so they honor the cache dir before any `load`. `will-quit` tears the manager down.
+  **No silent timeouts (ADR-016):** the batch/cloud `flushChannel` wraps `transcribe` in a 30s
+  watchdog that releases `state.transcribing[ch]` + surfaces an actionable error (mirrors
+  `runFeature`'s LLM idle watchdog); a streaming session that fails/latches mid-capture degrades
+  its channel to the batch loop in-session (`degradeChannelToBatch`); and `provider:'local'` with
+  the venv not ready auto-prepares it on first capture (`autoPrepareLocalVenv`, reuses the Settings
+  `ensureVenv` path + `stt:progress`) then re-opens sessions.
 
 ## Errors are normalized (ADR-011)
 

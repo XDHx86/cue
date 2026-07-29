@@ -16,53 +16,61 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 *next*; it is not a transcript.
 
 ## Branch
-- `feat/local-stt-engine` — **6 commits ahead of `main`**. `feat/mvp-overhaul` is an ancestor;
-  it carried the overhaul phases (0a/0b/1/2/3/5/6) into `main`, so this branch is scoped to the
-  STT feature itself.
-- Goal: **managed local Speech-to-Text with faster-whisper** — zero-config (no `pip`, **no
-  native modules** in cue), behind an engine-agnostic seam so a second engine (whisper.cpp)
-  registers without app changes (ADR-013). Layered onto the existing streaming pipeline
-  (ADR-008), not a parallel system.
+- `fix/stt-transcription-timeout` (off `main`). Goal: **Priority 1 — fix transcription** so
+  local Python / OpenAI / Gemini all transcribe the same captured audio with no silent timeouts
+  and actionable errors; follows the 8-priority overhaul plan at
+  [`.claude/plans/cue-fix-plan.md`](../plans/cue-fix-plan.md).
 
 ## Completed (committed)
-- **Local STT engine** — 5 commits (`36f83af`→`e1bf887`) + `70f18d3` (Settings scroll prereq):
-  - `36f83af` — [`src/stt-process.js`](../../src/stt-process.js) `createSttProcessManager`
-    (venv bootstrap, line-delimited JSON-RPC, restart-with-backoff + latch after 3, clean
-    shutdown) + [`python/cue_stt_service.py`](../../python/cue_stt_service.py) +
-    `python/requirements.txt`. Param-injected `{ spawn, spawnSync, fs, getPath }` → tests spawn
-    no Python.
-  - `8935d05` — [`src/stt-engine.js`](../../src/stt-engine.js) registry (`registerEngine`/
-    `createEngineSession`) + `LocalFasterWhisperSession`; [`src/stt-stream.js`](../../src/stt-stream.js)
-    `resolveProvider`/`createStreamSTT` routing. `auto` → local (venv ready) → external WS URL
-    → null/batch; `local`/`faster-whisper`/`batch` forced. `store.js` `DEFAULTS.stt` + ENV.
-  - `4a51914` — Settings → Speech-to-Text panel (enable · engine · model · download/delete ·
-    device · compute type · language · VAD · diagnostics) + preload IPC + main wiring +
-    [`src/stt-models.js`](../../src/stt-models.js) shared model list.
-  - `0c07423` — `model_download`/`delete`/`list` pass `download_root` so they honor the cache
-    dir before any `load` (the service's sticky root is unset pre-load).
-  - `e1bf887` — npm scripts (`stt:setup|status|models|download|delete`) + `scripts/stt-cli.js`.
-- **Tests:** `test/stt-process`, `test/stt-engine`, `test/stt-stream` (incl. a real loopback WS
-  server), `test/stt-models` (JS↔Python list-drift guard), `test/stt-cli`, `test/stt`, `test/env`.
-  **171/171 pass.**
+- **P1 — transcription root-cause fixes** (commit `be96ab6`): decouple model download from load
+  (download first with progress → cache-only load, finite 120s timeout); pre-sid bounded PCM ring
+  (D2); mid-capture channel degradation to batch in-session (D3); 30s batch/cloud transcribe
+  watchdog releasing the channel lock (D4/D5); actionable provider-specific error surfacing (D6);
+  auto-prepare the venv on first capture for `provider:'local'` (D9); `main.js` wired to a
+  `sttChild('main-stt')` structured logger. Python `load()` gained `local_files_only`. New
+  `scripts/stt-test-providers.js` (+ `npm run stt:test-providers`) feeds one WAV through every
+  provider. **206/206 tests pass.**
 
 ## In flight
-- **Commit 5 — docs (uncommitted).** Rewritten:
-  [docs/faster-whisper-setup.md](../../docs/faster-whisper-setup.md) (managed-engine + external
-  split), [README.md](../../README.md), [docs/architecture.md](../../docs/architecture.md);
-  [.claude/docs/](architecture.md) [architecture](architecture.md) / [conventions](conventions.md)
-  / [troubleshooting](troubleshooting.md); ADR-013 in [decisions.md](decisions.md) (ADR-006/008
-  → implemented); plus this file + [implementation-plan](implementation-plan.md) +
-  [context-summary](context-summary.md). Verify with `git diff`.
+- **P1 — docs.** ADR-014 (logging) + ADR-016 (no silent timeouts) added to
+  [decisions](decisions.md) (ADR-015 reserved for P8); [architecture](architecture.md) STT/engine
+  + main.js-wiring sections updated; this file + [context-summary](context-summary). Not yet
+  committed.
 
 ## Next
-1. Final verification (`npm test` ✅, scan for stray TODOs / debug flags) → commit the docs →
-   merge `feat/local-stt-engine`.
-2. Out of scope for this branch: **Phase 4 — prompt-compose seam** (skills · rolling memory ·
-   pre-prompt · résumé-efficiency, ADR-007/009), the one open roadmap item — see
-   [implementation-plan.md](implementation-plan.md).
+1. Commit P1 docs, then verify P1 end-to-end (user runs `npm run stt:setup` + the manual
+   checklist below — can't be done headless).
+2. **P2** — migrate the remaining ~39 `console.*` in main/llm to the structured logger (the STT
+   transport already exists; generalize beyond STT).
+3. **P3** — Settings as categorized tabs (Providers · Whisper · Model · Memory · Audio · Screen ·
+   Shortcuts · Advanced), preserving every field.
+4. Then P4 (mute/unmute), P5 (screen perms), P6 (notifications), P7 (CI/build/Docker), P8 (.env
+   retirement, ADR-015). See [`cue-fix-plan.md`](../plans/cue-fix-plan).
+
+### P1 manual verification checklist (the user runs this)
+```
+npm test                 # 206/206 green (CI half)
+npm run stt:setup        # one-time venv (or let auto-prepare do it on first capture)
+npm start                # then in the overlay:
+  - Settings → Speech-to-Text → Provider: local → toggle listening → say a few words
+    Expect: "starting…" badge → "streaming" → a transcript appears (local works)
+  - Provider: auto with an OpenAI key, no venv → batch path transcribes (OpenAI works)
+  - Provider: auto with a Gemini key only → batch transcribes (Gemini works)
+  - Kill a cloud key / pull network → expect an actionable status, NOT a silent hang
+node scripts/stt-test-providers.js ./sample.wav   # same audio via all three, no mic
+```
 
 ## Blockers / open questions
-- None hard-blocking.
+- None hard-blocking. **Cannot verify live transcription headless** (no audio hardware, no keys,
+  no Electron) — P1's "works for all three providers" success criterion requires the user's machine.
 
 ## Session discoveries (in flight — promote at commit, then clear)
-- _(empty — last cleared: 2026-07-28)_
+- **The local-vs-cloud failure modes were structurally separate but presented identically.** The
+  `auto` transport gates the local engine on `manager.isVenvReady()`, and `getSttManager()` only
+  *creates* the manager (never bootstraps the venv) — so on `auto` with no venv + no WS URL the
+  pipeline silently falls to the band batch path, while `provider:'local'` with no venv dropped
+  everything. Diagnosis required reading the *whole* pipeline, not one provider. (Promote to
+  [memory.md](memory.md) at commit.)
+- `load` at `timeout:0` + `local_files_only=False` was the single highest-impact defect: a silent
+  download blocked `stream_start` forever and dropped all PCM. Decoupling download from load was
+  the real fix; raising timeouts would have changed nothing.

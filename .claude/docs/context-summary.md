@@ -20,38 +20,30 @@ It is a compressed view — if it disagrees with a permanent file, that file win
 build step) that captures **screen + mic + meeting audio**, transcribes them as two
 end-to-end channels (`you` / `them`), and streams answers from a bring-your-own-key LLM
 (OpenAI / Anthropic / Gemini / Nvidia / **Ollama**). Everything runs locally except the
-provider call. Speech-to-text defaults to a **managed local faster-whisper** Python service —
-cue spawns it, no `pip`, no native modules (ADR-013); external WS server or cloud
-Whisper/Gemini are fallbacks. The central invariant: **the three inputs stay separate and the
-channel tag preserves "who said what"** through transcript → prompt → render.
+provider call. Speech-to-text defaults to a **managed local faster-whisper** Python service
+(ADR-013) spawned by main; external WebSocket server or cloud Whisper/Gemini are fallbacks.
+The central invariant: **the three inputs stay separate and the channel tag preserves "who
+said what"** through transcript → prompt → render.
+
+## Right now
+- Branch `fix/stt-transcription-timeout`, an 8-priority overhaul plan at
+  [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md). **P1 (fix transcription) is committed**
+  (`be96ab6`): decouple download-from-load + cache-only load + finite timeouts + actionable errors
+  + mid-capture channel degradation (ADR-016). STT logging already centralized (Pino+Loguru, ADR-014).
+  **206/206 tests pass.**
+- **In flight (uncommitted): P1 docs** — ADR-014/ADR-016 added; [architecture](architecture.md) STT
+  + main.js-wiring sections updated; state/plan/this file. Verify with `git diff`.
+- **Next: P2** — migrate the remaining `console.*` in main/llm to the structured logger, then P3
+  (Settings tabs) → P4/P5/P6/P7/P8. [state.md](state.md) has the manual P1 verification checklist.
 
 ## Where things live
-- Architecture & seams → [architecture.md](architecture.md)
-- Coding rules & gotchas → [conventions.md](conventions.md)
-- Why things are this way → [decisions.md](decisions.md)
-- Recurring pitfalls → [memory.md](memory.md)
-- Per-provider notes → [providers.md](providers.md)
-- Terms → [glossary.md](glossary.md)
-- Dev troubleshooting → [troubleshooting.md](troubleshooting.md)
+- Architecture & seams → [architecture.md](architecture.md) · Coding rules → [conventions.md](conventions.md)
+- Why → [decisions.md](decisions.md) · Pitfalls → [memory.md](memory.md) · Providers →
+  [providers.md](providers.md) · Terms → [glossary.md](glossary.md) · Dev trouble → [troubleshooting.md](troubleshooting.md)
 
 ## Where the work is
 - Current snapshot → [state.md](state.md) — and `git status` / `git diff` for the live tree.
-- The roadmap & phase status → [implementation-plan.md](implementation-plan.md)
-
-## Right now
-- Branch `feat/local-stt-engine`, 6 commits ahead of `main`. (Its ancestor `feat/mvp-overhaul`
-  carried the overhaul phases 0a/0b/1/2/3/5/6 into `main` first; this branch adds the
-  **managed local STT** feature.)
-- Committed on this branch (5 STT commits, `36f83af`→`e1bf887`): managed faster-whisper Python
-  service + venv bootstrap; engine-agnostic registry + streaming session + routing; Settings
-  UI + preload IPC + main wiring; `download_root` honored before any `load`; npm scripts +
-  `scripts/stt-cli.js`. Plus one Settings-panel scroll fix. **171/171 tests pass.**
-- **In flight (uncommitted): Commit 5 — docs** ([faster-whisper-setup](../../docs/faster-whisper-setup.md),
-  [README](../../README.md), architecture, ADR-013, conventions, troubleshooting, state/plan).
-  Verify with `git diff`.
-- Next: final verification + merge. After this branch the one open roadmap item is **Phase 4 —
-  prompt-compose seam** (skills · rolling memory · pre-prompt · résumé — ADR-007/009); see
-  [implementation-plan.md](implementation-plan.md).
+- The roadmap → [implementation-plan.md](implementation-plan.md) · The 8-priority plan → [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md)
 
 ## How to behave here
 - **Rewrite, don't append** (see [compression-policy.md](compression-policy.md)).
