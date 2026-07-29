@@ -1,4 +1,3 @@
-const DEBUG = false; // Set to false to disable debug logging
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -17,15 +16,17 @@ const { createStreamSTT } = require('./src/stt-stream');
 // or an explicit Settings Prepare). Kept off the hot path so batch/external-WS users
 // never pay for it. A single instance is shared with the engine via createStreamSTT.
 const { createSttProcessManager } = require('./src/stt-process');
-// Structured STT logging (Pino singleton — src/stt-logger.js, ADR-014): getSttLogger() builds the
-// shared console + rotating-file root once (idempotent); the manager + the stream STT both derive
-// module-scoped children from it; stopSttLogger() flushes the transport on quit. Created lazily
-// (app.getPath isn't safe before whenReady) so the batch/external-WS paths never pay for it.
-const { getSttLogger, sttChild, stopSttLogger } = require('./src/stt-logger');
-// Module-scoped structured logger for main's STT lifecycle (console → npm terminal + dated file,
-// ADR-014). Lazily resolved: getSttLogger() needs store settings, so first use defers until then.
-let sttLog = null;
-function mainSttLog() { return sttLog || (sttLog = sttChild('main-stt')); }
+// Structured app logging (Pino singleton — src/logger.js, ADR-014, generalized in P2):
+// getLogger() builds the shared console (→ stderr → npm terminal) + rotating dated-file root once
+// (idempotent); every main-process module derives a module-scoped child from it; stopLogger()
+// flushes the transport on quit. Created lazily (app.getPath isn't safe before whenReady) so the
+// batch/external-WS paths never pay for it. The STT process manager + stream STT reuse the SAME
+// singleton (the legacy stt-* aliases in src/logger.js point at these functions).
+const { getLogger, child, stopLogger } = require('./src/logger');
+// Module-scoped structured logger for main's lifecycle (console → npm terminal + dated file,
+// ADR-014). Lazily resolved: getLogger() needs store settings, so first use defers until then.
+let appLog_ = null;
+function appLog() { return appLog_ || (appLog_ = child('main')); }
 const { engineMeta } = require('./src/stt-engine');
 const { scanCachedModels } = require('./src/stt-models');
 
@@ -39,12 +40,12 @@ function getSttManager() {
     // manager: the logger scopes itself per-module (module:'stt-process'); the logging block
     // becomes CUE_STT_LOG_* env on the spawned Python service (buildPyLogEnv → spawn env).
     const settings = store.getSettings();
-    getSttLogger(settings);
+    getLogger(settings);
     sttManager = createSttProcessManager({
       spawn: require('child_process').spawn,
       spawnSync: require('child_process').spawnSync,
       fs,
-      logger: getSttLogger(settings),
+      logger: getLogger(settings),
       logging: settings.stt && settings.stt.logging,
     });
     sttManager.setModelsDir(path.join(app.getPath('userData'), 'stt-models'));
@@ -172,7 +173,7 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   win.webContents.on('did-finish-load', () => win.showInactive());
-  win.webContents.on('render-process-gone', (_e, d) => console.log('[cue] renderer gone', JSON.stringify(d)));
+  win.webContents.on('render-process-gone', (_e, d) => appLog().warn({ details: JSON.stringify(d) }, 'renderer process gone'));
 }
 
 // -------- STT flushing (batch fallback) --------
@@ -219,7 +220,7 @@ async function flushChannel(channel) {
     if (res.text && res.text.trim()) {
       const turn = { channel, text: res.text.trim(), ts: Date.now() };
       pushFinal(turn);
-      mainSttLog().debug({ channel }, 'transcript', turn.text);
+      appLog().debug({ channel }, 'transcript', turn.text);
       send('transcript', turn);
     }
   } catch (e) {
@@ -236,7 +237,7 @@ async function flushChannel(channel) {
 function handleSttError(err, settings) {
   const isTimeout = err && err.timeout;
   const ne = normalizeSDKError(isTimeout ? { message: err.message } : err, err && err.provider);
-  mainSttLog().warn({ provider: ne.provider, status: ne.status, code: ne.code, timeout: !!isTimeout }, 'stt error');
+  appLog().warn({ provider: ne.provider, status: ne.status, code: ne.code, timeout: !!isTimeout }, 'stt error');
   if (sttDisabled) return;
   const noAccess = ne.status === 401 || ne.status === 403 || ne.code === 'model_not_found';
   sttDisabled = true; // stop hammering the API every few seconds; reset on settings:set
@@ -281,7 +282,7 @@ async function autoPrepareLocalVenv() {
     if (r && r.ok && state.capturing) {
       // Venv is ready — re-open streaming sessions so the now-available local engine picks up
       // live capture without forcing the user to toggle listening off and on.
-      mainSttLog().info('local venv prepared on first capture; reopening streaming sessions');
+      appLog().info('local venv prepared on first capture; reopening streaming sessions');
       openStreamSessions();
     } else if (!r || !r.ok) {
       send('stt:status', { active: false, reason: r && r.error ? r.error : 'Local STT setup failed. Install Python 3.10+ and retry, or use a cloud provider in Settings.' });
@@ -314,7 +315,7 @@ function openStreamSessions() {
   // the engine session without importing the manager itself.
   const stream = createStreamSTT(settings, {
     localEngineManager: (sttCfg.provider === 'local' || sttCfg.provider === 'auto') ? getSttManager() : undefined,
-    logger: getSttLogger(settings),
+    logger: getLogger(settings),
   });
   // D9 — 'local' chosen but the venv isn't ready yet: kick the one-time bootstrap (progress
   // surfaced) instead of silently transcribing nothing. The batch loop below still starts if a
@@ -331,14 +332,14 @@ function openStreamSessions() {
           const turn = { channel: ch, text, ts: ts || Date.now() };
           pushFinal(turn);                 // ring buffer (capped at TR_MAX_TURNS)
           clearPartial(ch);               // the live partial is now finalized — clear the cell
-          mainSttLog().debug({ channel: ch }, 'transcript', text);
+          appLog().debug({ channel: ch }, 'transcript', text);
           send('transcript', turn);        // finalized turn → renderer strip (Phase 3c)
         },
         onPartial: ({ text, ts }) => {
           setPartial(ch, text);            // live per-channel partial for Ctrl+Alt+A (Phase 3d)
           send('transcript:partial', { channel: ch, text, ts: ts || Date.now() });
         },
-        onError: (e) => { mainSttLog().warn({ channel: ch, error: e && e.message }, 'stt-stream error'); },
+        onError: (e) => { appLog().warn({ channel: ch, error: e && e.message }, 'stt-stream error'); },
         onStatus: (s) => {
           if (s.active) {
             send('stt:status', { active: true, provider: s.provider, channel: ch });
@@ -352,7 +353,7 @@ function openStreamSessions() {
             // this channel until a re-toggle, drop the session NOW so the `mic:pcm`/`system:pcm`
             // handlers fall back to the batch buffer, and start the flush loop to drain it. The
             // global latch stays so a re-toggle doesn't hammer the dead engine again.
-            mainSttLog().warn({ channel: ch, reason: s.reason }, 'streaming session failed mid-capture; degrading to batch');
+            appLog().warn({ channel: ch, reason: s.reason }, 'streaming session failed mid-capture; degrading to batch');
             degradeChannelToBatch(ch);
             sttStreamDisabled = true;
             send('stt:status', { active: false, reason: s.reason || 'streaming unavailable', channel: ch });
@@ -400,11 +401,11 @@ function setCapturing(active) {
 
 // -------- feature runner --------
 async function runFeature(mode, userText) {
-  if (DEBUG) console.log('[DEBUG MAIN] runFeature called:', { mode, userText, isBusy: state.busy });
+  appLog().debug({ mode, userText, busy: state.busy }, 'runFeature called');
   if (state.busy) return;
   const def = MODES[mode];
   if (!def) {
-    if (DEBUG) console.log('[DEBUG MAIN] mode not found:', mode);
+    appLog().debug({ mode }, 'mode not found');
     return;
   }
   state.busy = true;
@@ -417,7 +418,7 @@ async function runFeature(mode, userText) {
   function onWatchdog() {
     if (dead) return;
     dead = true; // late tokens from the dying stream now no-op
-    if (DEBUG) console.log('[DEBUG MAIN] stream idle watchdog: no tokens for 30s, releasing.');
+    appLog().warn('stream idle watchdog: no tokens for 30s, releasing');
     send('llm:error', { message: 'Stream timed out — no response tokens received for 30s.' });
     send('llm:done', {});
     state.busy = false; // release main's latch without waiting for the hung stream to settle
@@ -431,24 +432,24 @@ async function runFeature(mode, userText) {
     // no override effDef.system === def.system — a no-op (ADR-014).
     const effDef = { ...def, system: resolveField('mode.' + mode, settings) || def.system };
     const userBubble = def.userBubble !== null ? def.userBubble : (mode === 'ask' ? userText : null);
-    if (DEBUG) console.log('[DEBUG MAIN] LLM settings loaded:', { provider: settings.provider, smart: settings.smart });
+    appLog().debug({ provider: settings.provider, smart: settings.smart }, 'LLM settings loaded');
     send('llm:start', { userBubble, small: !!def.small });
 
     if (!llm.ready) {
-      if (DEBUG) console.log('[DEBUG MAIN] LLM not ready (missing key or model).');
+      appLog().debug('LLM not ready (missing key or model)');
       send('llm:error', { message: 'Add your ' + settings.provider + ' API key in Settings (gear icon) to start. Model: ' + (llm.model || 'unset') + '.' });
       return;
     }
 
     let imageDataUrl = null;
     if (def.needsScreen) {
-      if (DEBUG) console.log('[DEBUG MAIN] Feature needs screen. Capturing screenshot...');
+      appLog().debug('feature needs screen; capturing screenshot');
       try { 
         imageDataUrl = await captureScreenshot(); 
-        if (DEBUG) console.log('[DEBUG MAIN] Screenshot captured successfully (length:', imageDataUrl.length, ')');
+        appLog().debug({ bytes: imageDataUrl.length }, 'screenshot captured');
       }
       catch (e) { 
-        if (DEBUG) console.error('[DEBUG MAIN] Screenshot capture failed:', e);
+        appLog().warn({ error: e && e.message }, 'screenshot capture failed');
         send('status', { message: 'Screen capture needs permission — grant Screen Recording to cue in System Settings.' }); 
       }
     }
@@ -457,7 +458,7 @@ async function runFeature(mode, userText) {
     // answers from what's being said right now (Ctrl+Alt+A mid-speech) — liveTranscriptForPrompt
     // returns a snapshot clone, so a final arriving mid-build can't mutate the array we format.
     const built = def.build({ transcript: liveTranscriptForPrompt(), userText: userText || '' });
-    if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
+    appLog().debug('prompt built; starting LLM stream');
     armWatchdog();
     const fullText = await llm.stream({
       system: composeSystem({ def: effDef, settings, memoryState: memoryRunner }),
@@ -466,7 +467,7 @@ async function runFeature(mode, userText) {
       onToken: (t) => { armWatchdog(); send('llm:token', { text: t }); }
     });
     disarmWatchdog();
-    if (DEBUG) console.log('[DEBUG MAIN] Full LLM Output:\n', fullText);
+    appLog().debug({ chars: fullText.length }, 'LLM stream complete');
     if (!dead) send('llm:done', {});
   } catch (e) {
     disarmWatchdog();
@@ -505,7 +506,7 @@ async function regenerateResumeSummary() {
     const clean = (digest || '').trim().slice(0, 1500);
     if (clean) store.setSettings({ resumeSummary: clean });
   } catch (e) {
-    if (DEBUG) console.log('[cue] resume digest failed:', e && e.message);
+    appLog().warn({ error: e && e.message }, 'resume digest failed');
   }
 }
 
@@ -556,7 +557,7 @@ ipcMain.on('system:pcm', (_e, arrayBuffer) => {
 });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
-ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
+ipcMain.on('log', (_e, msg) => appLog().debug({ src: 'renderer' }, String(msg)));
 
 // -------- managed local STT IPC (Settings) --------
 // All four go through the shared manager; it venv-bootstraps on first use. Every one is a
@@ -648,7 +649,7 @@ function registerShortcuts() {
   const configured = settings.shortcuts && settings.shortcuts.assist;
   const result = registerAssistShortcut(configured || DEFAULT_ASSIST_SHORTCUT);
   if (!result.ok && configured && configured !== DEFAULT_ASSIST_SHORTCUT) {
-    console.log('[cue] unable to register Assist shortcut:', result.error, 'Falling back to default.');
+    appLog().warn({ shortcut: configured, error: result.error }, 'unable to register Assist shortcut; falling back to default');
     const fallback = registerAssistShortcut(DEFAULT_ASSIST_SHORTCUT);
     if (fallback.ok) store.setSettings({ shortcuts: { assist: DEFAULT_ASSIST_SHORTCUT } });
   }
@@ -721,8 +722,8 @@ app.on('will-quit', () => {
   // Tear down the managed STT Python process so it never orphans on quit. `stop()`
   // sends the service a shutdown, closes stdin, then kills after a grace — harmless
   // if the manager was never started (no child). Then flush the Pino transport
-  // (src/stt-logger.js) so the rotating-file worker drains before the process exits.
+  // (src/logger.js) so the rotating-file worker drains before the process exits.
   if (sttManager) { try { sttManager.stop(); } catch { /* best-effort */ } }
-  stopSttLogger();
+  stopLogger();
 });
 app.on('window-all-closed', () => app.quit());

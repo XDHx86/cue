@@ -18,12 +18,12 @@
 const net = require('net');
 const tls = require('tls');
 const crypto = require('crypto');
-// Optional structured STT logger (Pino). Defaulted to a noop so this module stays pure
-// Node and testable without a logging transport; production wires a sttChild from
-// src/stt-logger.js via createStreamSTT(settings, { logger }). It threads into the
+// Optional structured logger (Pino). Defaulted to a noop so this module stays pure
+// Node and testable without a logging transport; production wires a child from
+// src/logger.js via createStreamSTT(settings, { logger }). It threads into the
 // external faster-whisper WebSocket session for connect/open/close/backoff/latch
 // lifecycle events. A noop (the default) makes every log call a no-op in tests.
-const { noopLogger } = require('./stt-logger');
+const { noopLogger } = require('./logger');
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const OP_TEXT = 0x1, OP_BINARY = 0x2, OP_CLOSE = 0x8, OP_PING = 0x9, OP_PONG = 0xA;

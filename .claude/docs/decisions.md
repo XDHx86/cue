@@ -114,7 +114,7 @@ default (CUDA is an opt-in manual step) so `npm install` never pulls the CUDA st
 (repackaging); route the managed engine through the WS client (two transports, one surface wins).
 
 ## ADR-014 — Centralized STT logging: Pino (Node) + Loguru (Python) — implemented
-**Decision:** a shared structured logger (`src/stt-logger.js`, Pino singleton) for the Node STT
+**Decision:** a shared structured logger (`src/logger.js`, Pino singleton) for the Node STT
 lifecycle, and Loguru (`python/cue_stt_logging.py`) for the Python service. Console → stderr (fd
 2, so it appears in the `npm` terminal, stdout stays the JSON-RPC protocol) + a rotating dated
 file under `userData/logs`. Python stderr is one JSON line per record, parsed by the manager and

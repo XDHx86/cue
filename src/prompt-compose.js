@@ -1,4 +1,13 @@
-const DEBUG = false;
+// Structured logging (app Pino singleton, ADR-014). Lazily resolved + guarded so the pure-Node
+// test suite stays transport-less and Electron-free (getLogger can't resolve app.getPath there).
+const { child, noopLogger, getLogger } = require('./logger');
+let _log = null;
+function log() {
+  if (_log) return _log;
+  try { _log = (getLogger() && child('prompt-compose')) || noopLogger; }
+  catch { _log = noopLogger; }
+  return _log;
+}
 // The single system-prompt composition seam. Four features (pre-prompt, skills, memory,
 // résumé-efficiency) all edit this one point, so they don't collide: composeSystem concatenates
 // them in a fixed order and returns the full system string.
@@ -101,7 +110,7 @@ function composeSystem({ def, settings, memoryState } = {}) {
   const resume = resumeSection(def, settings);
   if (resume) sections.push(resume);
 
-  if (DEBUG) console.log('[compose] sections:', sections.length, 'len:', sections.join('\n\n').length);
+  log().debug({ sections: sections.length, len: sections.join('\n\n').length }, 'compose');
   return sections.join('\n\n');
 }
 

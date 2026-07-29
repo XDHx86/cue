@@ -23,15 +23,15 @@ const {
   createSttProcessManager, pickPython, buildVenvPlan, requirementsHash,
 } = require('../src/stt-process');
 const { scanCachedModels, STT_MODEL_SIZES } = require('../src/stt-models');
-// Structured STT logging (Pino singleton — src/stt-logger.js, ADR-014). The CLI runs OUTSIDE
+// Structured logging (Pino singleton — src/logger.js, ADR-014). The CLI runs OUTSIDE
 // Electron, so it builds the logger from CUE_STT_LOG_* env (not the settings store) using the
-//shared coercion helpers + constants — semantics match store.js's applyEnvOverrides path. The
+// shared coercion helpers + constants — semantics match store.js's applyEnvOverrides path. The
 // same `logging` block also threads through to the spawned Python service as CUE_STT_LOG_* env
-// (buildPyLogEnv → spawn), so `npm run stt:download large-v3` produces stt-python.log + Node
-// stt-node.log under <userData>/logs — exactly like the app. Flushed in main()'s finally.
+// (buildPyLogEnv → spawn), so `npm run stt:download large-v3` produces cue-python.log + Node
+// cue-node.log under <userData>/logs — exactly like the app. Flushed in main()'s finally.
 const { createSttLogger, stopSttLogger,
         coerceBool, coerceInt, normalizeLevel,
-        DEFAULT_LEVEL, DEFAULT_ROTATE_SIZE_BYTES, DEFAULT_ROTATE_COUNT } = require('../src/stt-logger');
+        DEFAULT_LEVEL, DEFAULT_ROTATE_SIZE_BYTES, DEFAULT_ROTATE_COUNT } = require('../src/logger');
 
 // Replicates Electron's app.getPath('userData') without loading Electron:
 //   win32  -> %APPDATA%/cue        (APPDATA = ...\AppData\Roaming)
@@ -86,7 +86,7 @@ function usage() {
 }
 
 // Build a settings.stt.logging-shaped config from CUE_STT_LOG_* env (reuses the canonical
-// coercions + constants from stt-logger.js, so levels/bools/ints resolve identically to the app).
+// coercions + constants from logger.js, so levels/bools/ints resolve identically to the app).
 // Unset env keys fall back to the same defaults DEFAULTS.stt.logging documents in store.js.
 function cliLoggingConfig() {
   const e = process.env;

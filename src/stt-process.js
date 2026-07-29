@@ -32,10 +32,10 @@ const crypto = require('crypto');
 // { trace/debug/info/warn/error/fatal, child }) — defaulting to a noop so the pure-Node
 // test suite never requires Pino and never spawns a worker transport (param-injection
 // invariant, .claude/docs/conventions.md). Production wiring passes a sttChild from
-// src/stt-logger.js. parsePyLogLine / mapPyLevelToPino forward the spawned Python
+// src/logger.js. parsePyLogLine / mapPyLevelToPino forward the spawned Python
 // service's stderr JSON logs into Pino preserving the level (ADR-014).
 const { noopLogger: _defaultNoop, mapPyLevelToPino, parsePyLogLine,
-        resolveLogDir } = require('./stt-logger');
+        resolveLogDir } = require('./logger');
 
 // Electron's app.getPath is resolved lazily (on first use), NOT at module load, so this module can
 // be `require`d by the pure-Node test suite without crashing: outside Electron `require('electron')`

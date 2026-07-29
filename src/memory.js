@@ -1,4 +1,13 @@
-const DEBUG = false;
+// Structured logging (app Pino singleton, ADR-014). Lazily resolved + guarded so the pure-Node
+// test suite stays transport-less and Electron-free (getLogger can't resolve app.getPath there).
+const { child, noopLogger, getLogger } = require('./logger');
+let _log = null;
+function log() {
+  if (_log) return _log;
+  try { _log = (getLogger() && child('memory')) || noopLogger; }
+  catch { _log = noopLogger; }
+  return _log;
+}
 // Rolling conversation summary. A background compaction loop folds finalized transcript turns
 // into a short running summary injected into later prompts as conversation memory.
 //
@@ -139,7 +148,7 @@ function createMemoryRunner(deps) {
       } catch (e) {
         // A failed compaction does NOT advance the watermark — those turns will be retried on the
         // next tick once the provider is healthy. The latch is released in the finally below.
-        if (DEBUG) console.log('[memory] summarize failed (will retry next tick):', e && e.message);
+        log().warn({ error: e && e.message }, 'summarize failed (will retry next tick)');
         return true;
       }
       // A non-throwing completion (including "(none)") advances the watermark past these turns so

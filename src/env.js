@@ -84,6 +84,8 @@ function loadDotenv() {
     let text = '';
     try { text = fs.readFileSync(p, 'utf8'); } catch { continue; }
     const applied = applyEnv(parseDotenv(text));
+    // console.log is intentional: this runs BEFORE the logger/store exist (main.js loads env.js
+    // first), so the Pino singleton isn't built yet. Gated by CUE_ENV_DEBUG so it's silent by default.
     if (applied > 0 && process.env.CUE_ENV_DEBUG) console.log('[cue env] loaded', applied, 'vars from', p);
     return applied;
   }

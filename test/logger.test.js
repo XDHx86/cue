@@ -10,7 +10,7 @@ const {
   resolveLogDir, normalizeLevel, coerceBool, coerceInt,
   NODE_LOG_FILE, DEFAULT_LEVEL,
   _resetSttLogger,
-} = require('../src/stt-logger');
+} = require('../src/logger');
 
 // The singleton root logger + its pino.transport worker must not leak between tests (a leftover
 // transport from one case would defeat the idempotency assertions and could dangle a worker).
@@ -228,14 +228,14 @@ test('createSttLogger writes a structured line to a rotating file under an absol
   if (flush && typeof flush.then === 'function') await flush;
 
   // pino-roll v4 EXTENDS the base stem with a rotation segment: the active file is
-  // stt-node.1.log (a date segment appears under daily rotation: stt-node.<date>.1.log). So we
-  // scan the dir for any stt-node* file and poll (bounded) for its content instead of reading a
+  // cue-node.1.log (a date segment appears under daily rotation: cue-node.<date>.1.log). So we
+  // scan the dir for any cue-node* file and poll (bounded) for its content instead of reading a
   // hard-coded name — robust to both the worker's async first-write and the extension format.
   const entry = await new Promise((resolve) => {
     const deadline = Date.now() + 3000;
     const poll = () => {
       let names = [];
-      try { names = fs.readdirSync(dir).filter((n) => n.startsWith('stt-node')); } catch {}
+      try { names = fs.readdirSync(dir).filter((n) => n.startsWith('cue-node')); } catch {}
       for (const n of names) {
         try { if (fs.readFileSync(path.join(dir, n), 'utf8').length) return resolve(n); } catch {}
       }
@@ -244,12 +244,12 @@ test('createSttLogger writes a structured line to a rotating file under an absol
     };
     poll();
   });
-  assert.ok(entry, 'a stt-node* rolling file was created and received content within 3s');
+  assert.ok(entry, 'a cue-node* rolling file was created and received content within 3s');
   const text = fs.readFileSync(path.join(dir, entry), 'utf8');
   assert.match(text, /integration line/, 'the message reached the rotating file');
   assert.match(text, /"hello":"world"/, 'structured payload was serialized');
-  assert.match(text, /"service":"cue-stt"/, 'base bindings (pid, service) are present');
+  assert.match(text, /"service":"cue"/, 'base bindings (pid, service) are present');
   assert.match(text, /"pid":\d+/, 'process id context is present');
-  assert.ok(entry.startsWith('stt-node') && entry !== NODE_LOG_FILE,
-    'pino-roll v4 appended a rotation segment to the base stem (stt-node.1.log)');
+  assert.ok(entry.startsWith('cue-node') && entry !== NODE_LOG_FILE,
+    'pino-roll v4 appended a rotation segment to the base stem (cue-node.1.log)');
 });

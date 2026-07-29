@@ -1,13 +1,19 @@
-// Centralized STT logging for the Node side (Pino). Structured, leveled, written
-// to a console destination plus a rotating file destination under userData/logs.
+// Centralized app logging for the Node/Electron side (Pino). Structured, leveled,
+// written to a console destination plus a rotating dated file under userData/logs.
 //
-// Singleton: createSttLogger()/getSttLogger() cache ONE root logger so the
-// transports (console + rotating file) are never instantiated twice — there is
-// always exactly one log-file handle, never duplicates. Consumers get module-scoped
-// child loggers via sttChild(name); future STT Node modules reuse this with no
-// refactoring. The param-injected STT manager (src/stt-process.js) defaults its
-// logger to `noopLogger`, so the pure-Node tests never require Pino and never
-// spawn a worker transport (tests stay electron-free per .claude/docs/conventions.md).
+// This is the APP-wide logger (ADR-014, generalized in P2): one Pino singleton shared
+// by every main-process module via a module-scoped child (child('llm'), child('main'),
+// child('stt-process')). It is NOT STT-specific; the STT modules were the first users
+// (hence the legacy stt-* aliases still exported below for back-comat), but the
+// transport machinery — console→stderr + rotating file, level coercion, the
+// Python→Pino stderr bridge — is generic.
+//
+// Singleton: createLogger()/getLogger() cache ONE root logger so the transports are
+// never instantiated twice — always exactly one log-file handle, never duplicates.
+// Consumers get module-scoped child loggers via child(name). The param-injected STT
+// manager (src/stt-process.js) defaults its logger to `noopLogger`, so the pure-Node
+// tests never require Pino and never spawn a worker transport (tests stay
+// electron-free per .claude/docs/conventions.md).
 //
 // Python→Pino bridge: the managed Python service emits one JSON log object per
 // stderr line (python/cue_stt_logging.py, Loguru). onStderr in stt-process.js
@@ -27,10 +33,10 @@ const DEFAULT_LEVEL = 'info';            // debug|info|warn|error|fatal
 const DEFAULT_ROTATE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 const DEFAULT_ROTATE_COUNT = 5;          // rotated files kept (+ the active one)
 // Base stem for the Node rolling log file. pino-roll v4 appends a rotation segment — the active
-// file is `stt-node.1.log`, rotating to `.2.log`, `.3.log`… (and a date segment under daily
-// rotation: `stt-node.<YYYY-MM-DD>.1.log`). So this is the BASE, not an exact filename; tests and
-// docs glob `stt-node*` rather than read this literally. Python keeps its own stt-python.log stem.
-const NODE_LOG_FILE = 'stt-node.log';
+// file is `cue-node.1.log`, rotating to `.2.log`, `.3.log`… (and a date segment under daily
+// rotation: `cue-node.<YYYY-MM-DD>.1.log`). So this is the BASE, not an exact filename; tests and
+// docs glob `cue-node*` rather than read this literally. Python keeps its own cue-python.log stem.
+const NODE_LOG_FILE = 'cue-node.log';
 
 const KNOWN_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
 
@@ -102,7 +108,7 @@ function createSttLogger(opts = {}) {
   const rotateBytes = coerceInt(rotate.sizeBytes, DEFAULT_ROTATE_SIZE_BYTES);
   const rotateCount = coerceInt(rotate.count, DEFAULT_ROTATE_COUNT);
 
-  const loggerOpts = { level, base: { pid: process.pid, service: 'cue-stt' } };
+  const loggerOpts = { level, base: { pid: process.pid, service: 'cue' } };
 
   const targets = [];
   if (useConsole) {
@@ -133,7 +139,7 @@ function createSttLogger(opts = {}) {
     _transport = pino.transport({ targets });
     // A transport failure (e.g. disk full / packaged-app worker hiccup) must never
     // break the STT pipeline — surface it best-effort and keep running.
-    _transport.on('error', (e) => { try { console.warn('[stt-logger] transport error', e && e.message); } catch {} });
+    _transport.on('error', (e) => { try { console.warn('[logger] transport error', e && e.message); } catch {} });
     _rootLogger = pino(loggerOpts, _transport);
     return _rootLogger;
   }
@@ -156,11 +162,30 @@ function getSttLogger(cfg) {
   });
 }
 
+// App-level entry (P2 generalization). Reads the top-level `logging` config block;
+// falls back to the legacy `stt.logging` block so existing settings keep working
+// during the transition (one app logger, not a second STT-only one).
+function getLogger(cfg) {
+  if (_rootLogger) return _rootLogger;
+  const logging = (cfg && cfg.logging) || (cfg && cfg.stt && cfg.stt.logging) || {};
+  return createSttLogger({
+    level: logging.level, logDir: logging.logDir,
+    console: logging.console, file: logging.file, pretty: logging.pretty,
+    rotate: logging.rotate,
+  });
+}
+
 // Module-scoped child for a consumer. main.js inits first via getSttLogger(settings),
 // then sttChild('stt-process') throughout. A child with no init first falls back to
 // defaults (Electron userData) — acceptable inside the app process.
 function sttChild(name, bindings = {}) {
   return getSttLogger().child({ module: name, ...bindings });
+}
+
+// Neutral alias (P2): app modules call child('llm') / child('main'); STT modules keep
+// using sttChild. Same singleton, same `module`-tagged children — one log stream.
+function child(name, bindings = {}) {
+  return getLogger().child({ module: name, ...bindings });
 }
 
 // Flush + drop the root so a fresh configuration can rebuild it (app quit / tests).
@@ -244,6 +269,11 @@ const noopLogger = {
 };
 
 module.exports = {
+  // Neutral app-level API (P2). Preferred for new consumers.
+  createLogger: createSttLogger, getLogger, child, stopLogger: stopSttLogger,
+  _resetLogger: stopSttLogger,
+  // Legacy STT-named aliases (back-comat for src/stt-process.js, src/stt-stream.js,
+  // scripts/stt-cli.js, and test/logger.test.js). Same underlying singleton.
   createSttLogger, getSttLogger, sttChild, stopSttLogger,
   noopLogger,
   mapPyLevelToPino, parsePyLogLine, logPyStderrLine,

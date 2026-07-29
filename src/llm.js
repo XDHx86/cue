@@ -1,8 +1,23 @@
-const DEBUG = false; // Set to false to disable debug logging
 // LLM factory — OpenAI / Anthropic / Gemini behind one streaming interface.
-// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
+// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText
+//
+// Structured logging via the app Pino singleton (src/logger.js, ADR-014). Lazily resolved + guarded:
+// outside the app process (pure-Node tests, no Electron) getLogger() can't resolve app.getPath, so
+// a build failure falls back to noopLogger — tests never spawn a Pino transport and never need
+// Electron. Inside the app, main.js has already built the root with persisted settings, so child('llm')
+// just derives a module-scoped child. Traces are debug-level (silent at the default info level, the
+// equivalent of the old `DEBUG = false`).
 
+const { child, noopLogger, getLogger } = require('./logger');
 const { normalizeSDKError } = require('./errors');
+
+let _log = null;
+function log() {
+  if (_log) return _log;
+  try { _log = (getLogger() && child('llm')) || noopLogger; }
+  catch { _log = noopLogger; }
+  return _log;
+}
 
 function stripDataUrl(dataUrl) {
   const m = /^data:(.+?);base64,(.*)$/s.exec(dataUrl || '');
@@ -10,7 +25,7 @@ function stripDataUrl(dataUrl) {
 }
 
 async function streamOpenAI({ apiKey, model, provider, system, turns, imageDataUrl, maxTokens, onToken, baseURL }) {
-  if (DEBUG) console.log('[DEBUG LLM] streamOpenAI called', { model, baseURL, hasImage: !!imageDataUrl, maxTokens });
+  log().debug({ model, baseURL, hasImage: !!imageDataUrl, maxTokens }, 'streamOpenAI called');
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey, baseURL });
   const messages = [{ role: 'system', content: system }];
@@ -25,7 +40,7 @@ async function streamOpenAI({ apiKey, model, provider, system, turns, imageDataU
       messages.push({ role: t.role, content: t.text });
     }
   });
-  if (DEBUG) console.log('[DEBUG LLM] streamOpenAI sending request to OpenAI SDK with messages count:', messages.length);
+  log().debug({ model, messages: messages.length }, 'streamOpenAI sending request');
   try {
     const stream = await client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens });
     let full = '';
@@ -33,16 +48,16 @@ async function streamOpenAI({ apiKey, model, provider, system, turns, imageDataU
       const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
       if (d) { full += d; onToken(d); }
     }
-    if (DEBUG) console.log('[DEBUG LLM] streamOpenAI finished successfully, total length:', full.length);
+    log().debug({ chars: full.length }, 'streamOpenAI finished');
     return full;
   } catch (err) {
-    if (DEBUG) console.error('[DEBUG LLM] streamOpenAI error:', err);
+    log().warn({ error: err && err.message }, 'streamOpenAI error');
     throw normalizeSDKError(err, provider || 'openai');
   }
 }
 
 async function streamAnthropic({ apiKey, model, provider, system, turns, imageDataUrl, maxTokens, onToken }) {
-  if (DEBUG) console.log('[DEBUG LLM] streamAnthropic called', { model, hasImage: !!imageDataUrl, maxTokens });
+  log().debug({ model, hasImage: !!imageDataUrl, maxTokens }, 'streamAnthropic called');
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
   const messages = turns.map((t, i) => {
@@ -56,23 +71,23 @@ async function streamAnthropic({ apiKey, model, provider, system, turns, imageDa
     }
     return { role: t.role, content: t.text };
   });
-  if (DEBUG) console.log('[DEBUG LLM] streamAnthropic sending request to Anthropic SDK with messages count:', messages.length);
+  log().debug({ model, messages: messages.length }, 'streamAnthropic sending request');
   try {
     const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true });
     let full = '';
     for await (const ev of stream) {
       if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') { full += ev.delta.text; onToken(ev.delta.text); }
     }
-    if (DEBUG) console.log('[DEBUG LLM] streamAnthropic finished successfully, total length:', full.length);
+    log().debug({ chars: full.length }, 'streamAnthropic finished');
     return full;
   } catch (err) {
-    if (DEBUG) console.error('[DEBUG LLM] streamAnthropic error:', err);
+    log().warn({ error: err && err.message }, 'streamAnthropic error');
     throw normalizeSDKError(err, provider || 'anthropic');
   }
 }
 
 async function streamGemini({ apiKey, model, provider, system, turns, imageDataUrl, maxTokens, onToken }) {
-  if (DEBUG) console.log('[DEBUG LLM] streamGemini called', { model, hasImage: !!imageDataUrl, maxTokens });
+  log().debug({ model, hasImage: !!imageDataUrl, maxTokens }, 'streamGemini called');
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const contents = turns.map((t, i) => {
@@ -84,7 +99,7 @@ async function streamGemini({ apiKey, model, provider, system, turns, imageDataU
     }
     return { role: t.role === 'assistant' ? 'model' : 'user', parts };
   });
-  if (DEBUG) console.log('[DEBUG LLM] streamGemini sending request to Google SDK with contents count:', contents.length);
+  log().debug({ model, contents: contents.length }, 'streamGemini sending request');
   try {
     const stream = await ai.models.generateContentStream({
       model, contents, config: { systemInstruction: system }
@@ -98,10 +113,10 @@ async function streamGemini({ apiKey, model, provider, system, turns, imageDataU
         lastFinishReason = chunk.candidates[0].finishReason;
       }
     }
-    if (DEBUG) console.log('[DEBUG LLM] streamGemini finished successfully, total length:', full.length, 'finishReason:', lastFinishReason);
+    log().debug({ chars: full.length, finishReason: lastFinishReason }, 'streamGemini finished');
     return full;
   } catch (err) {
-    if (DEBUG) console.error('[DEBUG LLM] streamGemini error:', err);
+    log().warn({ error: err && err.message }, 'streamGemini error');
     throw normalizeSDKError(err, provider || 'gemini');
   }
 }
@@ -112,20 +127,21 @@ function createLLM(settings) {
   const apiKey = keys[provider];
   const tier = settings.smart ? 'smart' : 'fast';
   const model = (settings.models[provider] || {})[tier];
-  
-  // Set to 4096 (effectively unlimited for a single response) 
+
+  // Set to 4096 (effectively unlimited for a single response)
   // since some SDKs like Anthropic require a maxTokens value.
   const maxTokens = 4096;
 
-  if (DEBUG) console.log('[DEBUG LLM] createLLM initialized:', { provider, model, isKeyPresent: !!apiKey, ready: (provider === 'ollama' ? !!model : (!!apiKey && !!model)) });
+  const ready = provider === 'ollama' ? !!model : (!!apiKey && !!model);
+  log().debug({ provider, model, ready }, 'createLLM initialized');
 
   return {
     provider, model, apiKey,
     // Ollama has no real key — the 'ollama' sentinel satisfies the OpenAI SDK constructor but
     // should not gate readiness. Ollama is ready as long as a model is configured.
-    ready: provider === 'ollama' ? !!model : (!!apiKey && !!model),
+    ready,
     async stream(params) {
-      if (DEBUG) console.log('[DEBUG LLM] stream() invoked for provider:', provider);
+      log().debug({ provider }, 'stream() invoked');
       const args = { apiKey, model, provider, maxTokens, ...params };
       if (provider === 'openai') return streamOpenAI(args);
       if (provider === 'nvidia') return streamOpenAI({ ...args, baseURL: 'https://integrate.api.nvidia.com/v1' });
