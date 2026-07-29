@@ -28,6 +28,15 @@
 const path = require('path');
 const crypto = require('crypto');
 
+// Structured STT logger (Pino). The manager accepts a `logger` (object: pino-shaped,
+// { trace/debug/info/warn/error/fatal, child }) — defaulting to a noop so the pure-Node
+// test suite never requires Pino and never spawns a worker transport (param-injection
+// invariant, .claude/docs/conventions.md). Production wiring passes a sttChild from
+// src/stt-logger.js. parsePyLogLine / mapPyLevelToPino forward the spawned Python
+// service's stderr JSON logs into Pino preserving the level (ADR-014).
+const { noopLogger: _defaultNoop, mapPyLevelToPino, parsePyLogLine,
+        resolveLogDir } = require('./stt-logger');
+
 // Electron's app.getPath is resolved lazily (on first use), NOT at module load, so this module can
 // be `require`d by the pure-Node test suite without crashing: outside Electron `require('electron')`
 // returns the binary path string (not { app }), so `app.getPath` would throw at load. Tests inject a
@@ -179,16 +188,44 @@ function requirementsHash(fs) {
   catch { return ''; }
 }
 
+// Build the CUE_STT_LOG_* environment the spawned Python service reads at startup
+// (python/cue_stt_logging.py setup_logging()). `logDir` is resolved to an ABSOLUTE
+// path here (via the injected getPath) so the Python side's os.makedirs works
+// regardless of the venv's cwd, and the Node + Python rotating log files share one
+// directory. Booleans/ints are stringified only when explicitly set, so an absent
+// key lets Python apply its own default. Pure given (logging, getPath); a mkdir
+// failure on the resolved dir is swallowed (non-fatal — Python degrades to
+// console-only logging, matching cue_stt_logging.py's own OSError guard).
+function buildPyLogEnv(logging, getPath) {
+  if (!logging) return {};
+  const env = {};
+  if (logging.level != null) env.CUE_STT_LOG_LEVEL = String(logging.level);
+  if (logging.console != null) env.CUE_STT_LOG_CONSOLE = String(logging.console);
+  if (logging.file != null) env.CUE_STT_LOG_FILE = String(logging.file);
+  if (logging.pretty != null) env.CUE_STT_LOG_PRETTY = String(logging.pretty);
+  const rotate = logging.rotate || {};
+  if (rotate.sizeBytes != null) env.CUE_STT_LOG_ROTATE_SIZE = String(rotate.sizeBytes);
+  if (rotate.count != null) env.CUE_STT_LOG_ROTATE_COUNT = String(rotate.count);
+  try { env.CUE_STT_LOG_DIR = resolveLogDir(logging.logDir, getPath); }
+  catch { /* unwritable/invalid dir is non-fatal: Python logs to console only */ }
+  return env;
+}
+
 module.exports = {
   REQS_PATH, SCRIPT_PATH,
   encodeJsonLine, parseJsonLine, RpcChannel,
-  pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash,
+  pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash, buildPyLogEnv,
   PY_CANDIDATES, MAX_SPAWN_FAILURES, HELLO_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS,
 
-  createSttProcessManager({ spawn, spawnSync, fs, getPath = defaultGetPath, log = () => {},
+  createSttProcessManager({ spawn, spawnSync, fs, getPath = defaultGetPath,
+    logger = _defaultNoop, logging = null,
     setTimeout: setTimer = global.setTimeout, clearTimeout: clearTimer = global.clearTimeout }) {
     const platform = process.platform;
     let modelsDir = path.join(getPath('userData'), 'stt-models');
+    // Module-scoped child so every log line carries module:'stt-process' without the
+    // caller having to bind it each call. noopLogger.child() returns the same noop,
+    // so tests pay nothing.
+    const log = (logger && logger.child) ? logger.child({ module: 'stt-process' }) : logger;
 
     // -- process + venv state --
     let child = null;
@@ -217,7 +254,7 @@ module.exports = {
         if (obj.m === 'error') { diag.lastError = obj.error || 'error'; }
         const set = listeners[obj.m];
         if (set) for (const cb of set) {
-          try { cb(obj); } catch (e) { log('[stt-process] listener', obj.m, e && e.message); }
+          try { cb(obj); } catch (e) { log.warn({ event: obj.m, error: e && e.message }, 'listener error'); }
         }
       },
     });
@@ -240,30 +277,58 @@ module.exports = {
         if (line) channel.feedLineStr(line);
       }
     }
+    // ---- stderr framing: line-buffered so a Python JSON log spread across pipe
+    // chunks is parsed as ONE line. Each complete line is forwarded through Pino at
+    // the matching level (parsePyLogLine + mapPyLevelToPino); non-JSON lines
+    // (faster-whisper/numpy warnings, crash banners) fall through to debug. The tail is
+    // kept for diagnostics().lastError. stdout is JSON-RPC ONLY — a stray JSON-RPC line
+    // on stderr would already be a bug, but parsePyLogLine returns null for a record
+    // without a `level`, so protocol lines land in debug rather than as fake logs.
+    let stderrLine = '';
     function onStderr(chunk) {
-      const s = chunk.toString('utf8');
-      stderrBuf = (stderrBuf + s).slice(-1024); // keep the tail for last-error
-      log('[stt stderr]', s.trimEnd());
+      stderrLine += chunk.toString('utf8');
+      let nl;
+      while ((nl = stderrLine.indexOf('\n')) >= 0) {
+        const line = stderrLine.slice(0, nl);
+        stderrLine = stderrLine.slice(nl + 1);
+        if (line) _forwardPyStderrLine(line);
+      }
+    }
+    function _forwardPyStderrLine(line) {
+      stderrBuf = (stderrBuf + line + '\n').slice(-1024); // keep tail for last-error
+      const rec = parsePyLogLine(line);
+      if (rec) {
+        const fn = log[mapPyLevelToPino(rec.level)] || log.info;
+        fn.call(log, {
+          py: true, pyLevel: rec.level, pyModule: rec.module,
+          pyPid: rec.pid, pyTime: rec.ts, pyExtra: rec.extra, pyTraceback: rec.traceback,
+        }, String(rec.message || ''));
+      } else {
+        log.debug({ py: true }, line); // legacy free-form stderr (unstructured warning)
+      }
     }
 
     async function ensureVenv({ onVenvProgress = () => {} } = {}) {
       if (venv) return { ok: true, ...venv };
       const py = pickPython(spawnSync);
-      if (!py) { diag.lastError = 'Python 3.10+ not found on PATH'; return { ok: false, error: diag.lastError }; }
+      if (!py) { diag.lastError = 'Python 3.10+ not found on PATH'; log.error(diag.lastError); return { ok: false, error: diag.lastError }; }
       const reqsHash = requirementsHash(fs);
       const plan = buildVenvPlan({ userDataPath: getPath('userData'), platform, fs, reqsHash });
       diag.pythonVersion = py.version;
       try {
         if (plan.create) {
           onVenvProgress('Creating virtual environment…');
+          log.info('creating python virtual environment');
           const r = spawnSync(py.exe, ['-m', 'venv', plan.venvDir], { encoding: 'utf8' });
           if (r.status !== 0 || !fs.existsSync(plan.venvPython)) {
             diag.lastError = 'venv creation failed: ' + `${r.stdout || ''}${r.stderr || ''}`.trim();
+            log.error({ error: diag.lastError }, 'venv creation failed');
             return { ok: false, error: diag.lastError };
           }
         }
         if (plan.install) {
           onVenvProgress('Installing faster-whisper (one-time, CPU)…');
+          log.info('installing faster-whisper dependencies');
           await new Promise((resolve, reject) => {
             const pip = spawn(plan.venvPython, ['-m', 'pip', 'install', '--disable-pip-version-check',
                                                 '-r', REQS_PATH], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -283,6 +348,7 @@ module.exports = {
           + 'print(ctranslate2.get_cuda_device_count() > 0)'], { encoding: 'utf8' });
         if (verify.status !== 0) {
           diag.lastError = 'verify failed: ' + `${verify.stdout || ''}${verify.stderr || ''}`.trim();
+          log.error({ error: diag.lastError }, 'dependency verification failed');
           return { ok: false, error: diag.lastError };
         }
         const lines = (verify.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
@@ -290,16 +356,25 @@ module.exports = {
                  fasterWhisperVersion: lines[0] || 'unknown', cuda: String(lines[2]) === 'True' };
         diag.fasterWhisperVersion = venv.fasterWhisperVersion;
         diag.cuda = venv.cuda;
+        log.info({ python: py.version, faster_whisper: venv.fasterWhisperVersion, cuda: venv.cuda },
+                 'venv ready');
         return { ok: true, ...venv };
       } catch (e) {
         diag.lastError = (e && e.message) || String(e);
+        log.error({ error: diag.lastError }, 'venv setup failed');
         return { ok: false, error: diag.lastError };
       }
     }
 
     function spawnService() {
       if (!venv) throw new Error('venv not ready — call ensureVenv() first');
-      child = spawn(venv.venvPython, ['-u', SCRIPT_PATH], { stdio: ['pipe', 'pipe', 'pipe'] });
+      // Hand the logging config to the Python service as env (python/cue_stt_logging.py
+      // reads CUE_STT_LOG_* at startup). Merged onto process.env so PATH etc. survive;
+      // a resolved ABSOLUTE CUE_STT_LOG_DIR keeps the Node + Python rotating logs in one dir.
+      const pyLogEnv = buildPyLogEnv(logging, getPath);
+      const env = Object.keys(pyLogEnv).length ? { ...process.env, ...pyLogEnv } : undefined;
+      child = spawn(venv.venvPython, ['-u', SCRIPT_PATH], { stdio: ['pipe', 'pipe', 'pipe'], env });
+      log.debug({ script: SCRIPT_PATH, venv: venv.venvPython }, 'spawning stt service');
       rx = '';
       child.stdout.on('data', onStdout);
       child.stderr.on('data', onStderr);
@@ -327,10 +402,12 @@ module.exports = {
         spawnFailures = 0;
         diag.status = 'started';
         diag.lastError = null;
+        log.info({ python: diag.pythonVersion, faster_whisper: diag.fasterWhisperVersion,
+                   cuda: diag.cuda }, 'stt service started');
         if (lastLoad) {
           // a restart mid-session: re-load the last model and resume streaming sids
           try { await channel.request('load', lastLoad, { timeout: 0 }); }
-          catch (e) { log('[stt-process] re-load after restart failed', e.message); }
+          catch (e) { log.error({ error: e && e.message }, 're-load after restart failed'); }
         }
         for (const cb of listeners.status) {
           try { cb({ m: 'status', status: 'ready', active_model: diag.activeModel, cuda: diag.cuda }); }
@@ -339,6 +416,7 @@ module.exports = {
         return true;
       } catch (e) {
         diag.lastError = e && e.message;
+        log.error({ error: diag.lastError }, 'stt service start failed');
         try { if (child) child.kill(); } catch {}
         child = null;
         return false;
@@ -357,6 +435,7 @@ module.exports = {
       if (stopping) {
         stopping = false;
         diag.status = 'stopped';
+        log.info('stt service stopped');
         return;
       }
       // unexpected: restart with backoff, latch after MAX_SPAWN_FAILURES
@@ -365,6 +444,8 @@ module.exports = {
         latched = true;
         diag.status = 'latched';
         diag.lastError = `service exited ${spawnFailures}× — gave up; degrade to batch`;
+        log.error({ failures: spawnFailures },
+                  'stt service gave up after repeated crashes; degrading to batch');
         for (const cb of listeners.status) {
           try { cb({ m: 'status', status: 'inactive', reason: diag.lastError }); } catch {}
         }
@@ -373,6 +454,7 @@ module.exports = {
       const delay = Math.min(1000 * Math.pow(2, spawnFailures - 1), 8000);
       diag.status = 'restarting';
       diag.lastError = `service exited (code ${code}/${signal || ''}); restarting in ${delay}ms`;
+      log.warn({ code, signal, attempt: spawnFailures, delay }, 'stt service exited; restarting');
       for (const cb of listeners.status) {
         try { cb({ m: 'status', status: 'restarting', reason: diag.lastError }); } catch {}
       }
@@ -390,6 +472,7 @@ module.exports = {
     }
 
     function stop() {
+      log.info('stt service stopping');
       stopping = true;
       latched = false;
       spawnFailures = 0;
@@ -420,7 +503,7 @@ module.exports = {
       setLastLoad, getLastLoad, setModelsDir, getModelsDir,
       isRunning: () => running, isLatched: () => latched, isVenvReady: () => !!venv,
       // test-only escape hatches
-      _channel: channel, _onExit: onExit, _feedStdout: onStdout,
+      _channel: channel, _onExit: onExit, _feedStdout: onStdout, _feedStderr: onStderr,
       _setVenv(v) { venv = v; }, _setChild(c) { child = c; }, _setRunning(v) { running = v; },
     };
   },

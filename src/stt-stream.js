@@ -18,6 +18,12 @@
 const net = require('net');
 const tls = require('tls');
 const crypto = require('crypto');
+// Optional structured STT logger (Pino). Defaulted to a noop so this module stays pure
+// Node and testable without a logging transport; production wires a sttChild from
+// src/stt-logger.js via createStreamSTT(settings, { logger }). It threads into the
+// external faster-whisper WebSocket session for connect/open/close/backoff/latch
+// lifecycle events. A noop (the default) makes every log call a no-op in tests.
+const { noopLogger } = require('./stt-logger');
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const OP_TEXT = 0x1, OP_BINARY = 0x2, OP_CLOSE = 0x8, OP_PING = 0x9, OP_PONG = 0xA;
@@ -216,10 +222,11 @@ class WsClient {
 // exponential backoff; after 3 consecutive failures it latches and reports inactive so the
 // capture pipeline can degrade that channel to the batch STT path.
 class FasterWhisperStreamSession {
-  constructor({ url, language, onFinal, onPartial, onError, onStatus }) {
+  constructor({ url, language, onFinal, onPartial, onError, onStatus, log }) {
     this.url = url;
     this.language = language === undefined ? null : language;
     this.onFinal = onFinal; this.onPartial = onPartial; this.onError = onError; this.onStatus = onStatus;
+    this.log = log || noopLogger;
     this.ws = null;
     this.failCount = 0;
     this.userClosed = false;
@@ -228,12 +235,16 @@ class FasterWhisperStreamSession {
 
   start() {
     if (this.userClosed) return;
+    this.log.debug({ url: this.url, language: this.language }, 'stream session connecting');
     const ws = new WsClient({
       url: this.url,
       onOpen: () => this._onOpen(),
       onMessage: (m) => this._onMessage(m),
       onClose: () => this._onClose(),
-      onError: (e) => { if (this.onError) this.onError(e); },
+      onError: (e) => {
+        this.log.error({ error: e && e.message }, 'stream session socket error');
+        if (this.onError) this.onError(e);
+      },
     });
     this.ws = ws;
     ws.connect();
@@ -241,6 +252,7 @@ class FasterWhisperStreamSession {
 
   _onOpen() {
     this.failCount = 0;
+    this.log.info({ url: this.url, language: this.language }, 'stream session open');
     if (this.onStatus) this.onStatus({ active: true, provider: 'faster-whisper' });
     // Handshake: tell the server the audio format we will stream. Int16 mono @16kHz follows as
     // binary frames. language:null lets faster-whisper auto-detect.
@@ -263,16 +275,20 @@ class FasterWhisperStreamSession {
     if (this.userClosed) return;
     this.failCount++;
     if (this.failCount >= 3) {
+      this.log.error({ attempts: this.failCount },
+                     'stream session gave up after repeated connect failures; degrading to batch');
       if (this.onStatus) this.onStatus({ active: false, reason: 'faster-whisper unreachable after 3 attempts' });
       return; // latch: stop reconnecting; main degrades this channel to batch
     }
     const delay = Math.min(1000 * Math.pow(2, this.failCount - 1), 8000);
+    this.log.warn({ attempts: this.failCount, delay }, 'stream session closed; reconnecting');
     this.backoffTimer = setTimeout(() => { this.backoffTimer = null; this.start(); }, delay);
   }
 
   sendAudio(int16Buffer) { if (this.ws && this.ws.connected) this.ws.send(int16Buffer, true); }
 
   close() {
+    this.log.debug('stream session closing');
     this.userClosed = true;
     if (this.backoffTimer) { clearTimeout(this.backoffTimer); this.backoffTimer = null; }
     if (this.ws) { try { this.ws.close(); } catch {} this.ws = null; }
@@ -302,7 +318,8 @@ function resolveProvider(settings, { localReady = false } = {}) {
   return { provider: null, available: false }; // nothing streaming → batch fallback in main
 }
 
-function createStreamSTT(settings, { localEngineManager } = {}) {
+function createStreamSTT(settings, { localEngineManager, logger } = {}) {
+  const log = (logger && logger.child) ? logger.child({ module: 'stt-stream' }) : (logger || noopLogger);
   const { provider, available } = resolveProvider(settings, { localReady: !!(localEngineManager && localEngineManager.isVenvReady && localEngineManager.isVenvReady()) });
   return {
     available,
@@ -324,7 +341,7 @@ function createStreamSTT(settings, { localEngineManager } = {}) {
         return new FasterWhisperStreamSession({
           url: settings.stt.fasterWhisperURL,
           language,
-          onFinal, onPartial, onError, onStatus,
+          onFinal, onPartial, onError, onStatus, log,
         });
       }
       return null; // batch/deepgram have no streaming session here

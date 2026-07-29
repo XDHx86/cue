@@ -23,6 +23,15 @@ const {
   createSttProcessManager, pickPython, buildVenvPlan, requirementsHash,
 } = require('../src/stt-process');
 const { scanCachedModels, STT_MODEL_SIZES } = require('../src/stt-models');
+// Structured STT logging (Pino singleton — src/stt-logger.js, ADR-014). The CLI runs OUTSIDE
+// Electron, so it builds the logger from CUE_STT_LOG_* env (not the settings store) using the
+//shared coercion helpers + constants — semantics match store.js's applyEnvOverrides path. The
+// same `logging` block also threads through to the spawned Python service as CUE_STT_LOG_* env
+// (buildPyLogEnv → spawn), so `npm run stt:download large-v3` produces stt-python.log + Node
+// stt-node.log under <userData>/logs — exactly like the app. Flushed in main()'s finally.
+const { createSttLogger, stopSttLogger,
+        coerceBool, coerceInt, normalizeLevel,
+        DEFAULT_LEVEL, DEFAULT_ROTATE_SIZE_BYTES, DEFAULT_ROTATE_COUNT } = require('../src/stt-logger');
 
 // Replicates Electron's app.getPath('userData') without loading Electron:
 //   win32  -> %APPDATA%/cue        (APPDATA = ...\AppData\Roaming)
@@ -76,11 +85,34 @@ function usage() {
   ].join('\n');
 }
 
+// Build a settings.stt.logging-shaped config from CUE_STT_LOG_* env (reuses the canonical
+// coercions + constants from stt-logger.js, so levels/bools/ints resolve identically to the app).
+// Unset env keys fall back to the same defaults DEFAULTS.stt.logging documents in store.js.
+function cliLoggingConfig() {
+  const e = process.env;
+  return {
+    level: normalizeLevel(e.CUE_STT_LOG_LEVEL || DEFAULT_LEVEL),
+    logDir: e.CUE_STT_LOG_DIR || '',
+    console: coerceBool(e.CUE_STT_LOG_CONSOLE, true),
+    file: coerceBool(e.CUE_STT_LOG_FILE, true),
+    pretty: coerceBool(e.CUE_STT_LOG_PRETTY, true),
+    rotate: {
+      sizeBytes: coerceInt(e.CUE_STT_LOG_ROTATE_SIZE, DEFAULT_ROTATE_SIZE_BYTES),
+      count: coerceInt(e.CUE_STT_LOG_ROTATE_COUNT, DEFAULT_ROTATE_COUNT),
+    },
+  };
+}
+
 function makeManager(userData) {
+  const logging = cliLoggingConfig();
+  // createSttLogger: an empty logDir resolves to <userData>/logs via getPath; the manager's
+  // buildPyLogEnv resolves the SAME way, so the Node + Python rotating logs share one directory.
+  const logger = createSttLogger({ ...logging, getPath: () => userData });
   const m = createSttProcessManager({
     spawn, spawnSync, fs,
     getPath: () => userData,
-    log: (msg) => process.stderr.write('[stt] ' + msg + '\n'),
+    logger,
+    logging,
   });
   m.setModelsDir(path.join(userData, 'stt-models'));
   // Surface download/venv phases to stderr so scripts piping stdout stay clean.
@@ -163,16 +195,26 @@ async function main(argv) {
   if (!command || command === 'help') { console.log(usage()); return; }
   const userData = dataDir || resolveUserDataDir();
   const m = makeManager(userData);
-  switch (command) {
-    case 'setup':    return cmdSetup(m);
-    case 'status':   return cmdStatus(m, fs, userData);
-    case 'models':   return cmdModels(m, fs);
-    case 'download': return cmdDownload(m, name);
-    case 'delete':   return cmdDelete(m, name);
-    default:
-      console.error('unknown command: ' + command + '\n');
-      console.error(usage());
-      process.exitCode = 1;
+  try {
+    switch (command) {
+      case 'setup':    await cmdSetup(m); break;
+      case 'status':   await cmdStatus(m, fs, userData); break;
+      case 'models':   await cmdModels(m, fs); break;
+      case 'download': await cmdDownload(m, name); break;
+      case 'delete':   await cmdDelete(m, name); break;
+      default:
+        console.error('unknown command: ' + command + '\n');
+        console.error(usage());
+        process.exitCode = 1;
+    }
+  } finally {
+    // Flush the Pino transport (console + rotating-file worker) so the CLI's last log lines
+    // and the rotated file land before the process exits. Race a short timeout so a laggy
+    // flush can never hang the CLI; stopSttLogger() is also idempotent if main() re-runs.
+    try {
+      const p = stopSttLogger();
+      if (p && typeof p.then === 'function') await Promise.race([p, new Promise((r) => setTimeout(r, 1500))]);
+    } catch { /* best-effort */ }
   }
 }
 

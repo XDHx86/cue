@@ -35,7 +35,16 @@ import os
 import shutil
 import sys
 import time
-import traceback
+
+# Logging is configured once at startup from CUE_STT_LOG_* env (Node passes them on
+# spawn). stdout stays the JSON-RPC protocol; stderr carries one JSON log line per
+# record so Node can forward each through Pino at the matching level. See
+# python/cue_stt_logging.py and ADR-014. Configured at import time (not deferred to
+# main()) so the webrtcvad probe below — and any import-time warning — emits through
+# the configured sinks, not Loguru's default pretty handler.
+from cue_stt_logging import setup_logging, get_logger
+setup_logging()
+log = get_logger("cue_stt_service")
 
 # ---- audio / VAD constants (ported from docs/faster-whisper-setup.md) ----
 SR = 16000
@@ -55,11 +64,6 @@ ORG = "Systran"            # Systran/faster-whisper-<name>
 
 def hf_repo(name):
     return f"{ORG}/faster-whisper-{name}"
-
-
-# ---- logging to stderr only (keep stdout pristine JSON) -----------------
-def log(*a):
-    print(*a, file=sys.stderr, flush=True)
 
 
 # ---- a JSON line responder/emitter ---------------------------------------
@@ -94,7 +98,7 @@ try:
 except Exception:  # webrtcvad needs a C toolchain; not always buildable
     _VAD = None
     HAVE_VAD = False
-    log("[cue-stt] webrtcvad unavailable — using RMS energy gate instead")
+    log.warning("webrtcvad unavailable — using RMS energy gate instead")
 
 
 _NUMPY = None
@@ -185,31 +189,43 @@ class Service:
         from faster_whisper import WhisperModel  # type: ignore
         self.download_root = download_root or self.download_root
         dev, ct = self._resolve_device(device, compute_type)
-        # Load off the loop — it can download on first use, which blocks.
-        model = await asyncio.to_thread(
-            WhisperModel, name, device=dev, compute_type=ct,
-            download_root=self.download_root, local_files_only=False)
+        log.bind(model=name, device=dev, compute_type=ct,
+                 cuda=self.cuda).info("model loading")
+        t0 = time.monotonic()
+        try:
+            # Load off the loop — it can download on first use, which blocks.
+            model = await asyncio.to_thread(
+                WhisperModel, name, device=dev, compute_type=ct,
+                download_root=self.download_root, local_files_only=False)
+        except Exception:
+            log.bind(model=name, device=dev).exception("model load failed")
+            raise
         self.model = model
         self.model_name = name
         self.device = dev
         self.compute_type = ct
+        log.bind(model=name, device=dev, compute_type=ct,
+                 load_ms=int((time.monotonic() - t0) * 1000)).info("model ready")
         emit("status", status="ready", model=name, device=dev,
              compute_type=ct, cuda=self.cuda, vad=bool(vad))
         return {"model": name, "device": dev, "compute_type": ct}
 
     def unload(self):
+        log.bind(model=self.model_name).info("model unloading")
         self.model = None
         self.model_name = None
         for s in list(self.sessions.values()):
             s.clear()
         self.sessions.clear()
         emit("status", status="unloaded")
+        log.info("model unloaded")
         return {}
 
     # -- batch transcribe (WAV bytes -> text) -----------------------------
     async def transcribe(self, wav_b64, language=None):
         if self.model is None:
             raise ValueError("no model loaded")
+        log.bind(language=language).info("transcribe request")
         wav = base64.b64decode(wav_b64)
         # strip a standard 44-byte WAV header if present
         pcm = wav[44:] if wav[:4] == b"RIFF" else wav
@@ -217,10 +233,18 @@ class Service:
         return {"text": text}
 
     async def _whisper(self, audio_float, language=None, beam_size=1):
+        # Inference timing: faster-whisper.transcribe is the hot (CPU/GPU-bound) call.
+        # Measured here, not in transcribe(), so every caller (batch + partial + final)
+        # reports its own inference duration in the structured log.
+        t0 = time.monotonic()
         segs, _info = await asyncio.to_thread(
             self.model.transcribe, audio_float, language=language,
             beam_size=beam_size, vad_filter=False)
-        return " ".join(s.text.strip() for s in segs).strip()
+        text = " ".join(s.text.strip() for s in segs).strip()
+        log.bind(model=self.model_name, beam_size=beam_size, language=language,
+                 duration_ms=int((time.monotonic() - t0) * 1000),
+                 chars=len(text)).info("inference")
+        return text
 
     # -- streaming --------------------------------------------------------
     async def stream_start(self, language=None, vad=True):
@@ -229,6 +253,7 @@ class Service:
         sid = str(self._next_sid)
         self._next_sid += 1
         self.sessions[sid] = Session(self, sid, language, vad)
+        log.bind(sid=sid, language=language, vad=bool(vad)).info("stream_start")
         emit("status", status="streaming", sid=sid)
         return {"sid": sid}
 
@@ -244,6 +269,7 @@ class Service:
         s = self.sessions.pop(sid, None)
         if s:
             s.finalize_now()
+        log.bind(sid=sid).info("stream_stop")
         return {}
 
     # -- model cache management ------------------------------------------
@@ -272,24 +298,32 @@ class Service:
         from faster_whisper import WhisperModel  # type: ignore
         if download_root:
             self.download_root = download_root
+        log.bind(model=name).info("model downloading")
         emit("progress", phase="downloading", model=name, pct=None)
         # instantiate into the cache dir (downloads if missing; cache hit otherwise)
         dev, ct = self._resolve_device("cpu", "int8")
-        await asyncio.to_thread(
-            WhisperModel, name, device=dev, compute_type=ct,
-            download_root=self.download_root, local_files_only=False)
+        try:
+            await asyncio.to_thread(
+                WhisperModel, name, device=dev, compute_type=ct,
+                download_root=self.download_root, local_files_only=False)
+        except Exception:
+            log.bind(model=name).exception("model download failed")
+            raise
         emit("progress", phase="done", model=name, pct=100)
+        log.bind(model=name).info("model downloaded")
         return {"model": name}
 
     def model_delete(self, name, download_root=None):
         d = self._cache_dir(name, download_root)
         if not d or not os.path.isdir(d):
+            log.bind(model=name).info("model delete skipped (not cached)")
             return {"deleted": False, "error": "not cached"}
         if self.model_name == name:
             self.model = None
             self.model_name = None
             emit("status", status="unloaded", reason="model deleted")
         shutil.rmtree(d, ignore_errors=True)
+        log.bind(model=name).info("model deleted")
         return {"deleted": True, "model": name}
 
     def diagnostics(self):
@@ -327,6 +361,8 @@ class Session:
         self.last_partial = 0.0
         self.partial_in_flight = False
         self._closed = False
+        # sid-bound child so every feed/partial/final log carries the session id.
+        self.log = get_logger("cue_stt_service").bind(sid=sid)
 
     def feed(self, pcm):
         if self._closed or not self.vad:
@@ -335,6 +371,8 @@ class Session:
         for i in range(0, len(pcm) - VAD_BYTES + 1, VAD_BYTES):
             frame = pcm[i:i + VAD_BYTES]
             if is_voiced(frame):
+                if not self.in_speech:
+                    self.log.debug("speech start")  # ~16 feeds/s; log only the onset
                 self.speech.extend(frame)
                 self.in_speech = True
                 self.silence_ms = 0
@@ -362,7 +400,7 @@ class Session:
                 if text:
                     emit("partial", sid=self.sid, text=text, ts=_now_ms())
             except Exception as e:
-                log("[cue-stt] partial error:", e)
+                self.log.warning("partial transcription error", error=str(e))
             finally:
                 self.partial_in_flight = False
 
@@ -384,8 +422,9 @@ class Session:
                 text = await self.svc._whisper(to_float(snapshot), self.language)
                 if text:
                     emit("final", sid=self.sid, text=text, ts=_now_ms())
+                self.log.debug("utterance finalized", chars=len(text))
             except Exception as e:
-                log("[cue-stt] final error:", e)
+                self.log.warning("final transcription error", error=str(e))
 
         asyncio.ensure_future(go())
 
@@ -408,6 +447,7 @@ async def main(svc):
     svc._pyver = __import__("platform").python_version()
     svc._started = True
     loop = asyncio.get_running_loop()
+    log.bind(python=svc._pyver, vad=HAVE_VAD).info("stt service starting")
 
     while True:
         line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -419,6 +459,7 @@ async def main(svc):
         try:
             req = json.loads(line)
         except json.JSONDecodeError:
+            log.warning("unparseable request line", raw=line[:120])
             emit("error", error="unparseable request line")
             continue
         req_id = req.get("id")
@@ -430,12 +471,14 @@ async def main(svc):
             respond(req_id, True, result)
         except Exception as e:
             svc.last_error = f"{e}"
-            log("[cue-stt] handler error", method, repr(e))
-            traceback.print_exc(file=sys.stderr)
+            # log.exception attaches the full traceback (replaces traceback.print_exc).
+            log.bind(method=method, sid=req_id).exception("handler error")
             emit("error", error=f"{e}")
             respond(req_id, False, error=f"{e}")
 
+    log.info("stt service shutting down")
     await svc.shutdown()
+    log.info("stt service stopped")
 
 
 async def dispatch(svc, method, p):

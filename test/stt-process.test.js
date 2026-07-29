@@ -3,7 +3,8 @@ const test = require('node:test');
 
 const {
   encodeJsonLine, parseJsonLine, RpcChannel,
-  pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash,
+  pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash, buildPyLogEnv,
+  createSttProcessManager, MAX_SPAWN_FAILURES,
 } = require('../src/stt-process');
 
 // ---- framing ----
@@ -220,4 +221,137 @@ test('manager.start() succeeds when the spawned service answers hello with the m
   assert.equal(diag.pythonVersion, '3.11.2');
   assert.equal(diag.cuda, false);
   m.stop();
+});
+
+// ---- logging config → Python env passthrough (buildPyLogEnv, ADR-014) ----
+// The manager turns a settings.stt.logging-shaped block into CUE_STT_LOG_* env for the spawned
+// Python service (python/cue_stt_logging.py setup_logging reads these). logDir is resolved to
+// an ABSOLUTE <userData>/logs here so Node + Python rotating logs share one directory; an unset
+// key is omitted (Python applies its own default) rather than forced to a string.
+
+test('buildPyLogEnv returns {} when no logging config is given', () => {
+  assert.deepEqual(buildPyLogEnv(null, () => '/ud'), {});
+  assert.deepEqual(buildPyLogEnv(undefined, () => '/ud'), {});
+});
+
+test('buildPyLogEnv maps every set field to a CUE_STT_LOG_* env string and resolves logDir absolutely', () => {
+  const env = buildPyLogEnv(
+    { level: 'debug', console: false, file: true, pretty: false, rotate: { sizeBytes: 5242880, count: 5 } },
+    () => '/ud',
+  );
+  assert.equal(env.CUE_STT_LOG_LEVEL, 'debug');
+  assert.equal(env.CUE_STT_LOG_CONSOLE, 'false');
+  assert.equal(env.CUE_STT_LOG_FILE, 'true');
+  assert.equal(env.CUE_STT_LOG_PRETTY, 'false');
+  assert.equal(env.CUE_STT_LOG_ROTATE_SIZE, '5242880');
+  assert.equal(env.CUE_STT_LOG_ROTATE_COUNT, '5');
+  assert.equal(env.CUE_STT_LOG_DIR.replace(/\\/g, '/'), '/ud/logs',
+    'an empty/absent logDir resolves to <userData>/logs (absolute) so Python makedirs works');
+});
+
+test('buildPyLogEnv omits unset keys (Python applies its own default) but always resolves logDir', () => {
+  const env = buildPyLogEnv({ level: 'warn' }, () => '/ud');
+  assert.equal(env.CUE_STT_LOG_LEVEL, 'warn');
+  assert.equal(Object.prototype.hasOwnProperty.call(env, 'CUE_STT_LOG_CONSOLE'), false,
+    'unset keys are omitted, not forced to a string');
+  assert.equal(Object.prototype.hasOwnProperty.call(env, 'CUE_STT_LOG_FILE'), false);
+  assert.ok(env.CUE_STT_LOG_DIR, 'logDir is always resolved so a rotating file target is set');
+});
+
+test('buildPyLogEnv honors an absolute logDir as-is; a relative one resolves under userData', () => {
+  const abs = buildPyLogEnv({ logDir: '/var/log/cue' }, () => '/ud');
+  assert.equal(abs.CUE_STT_LOG_DIR.replace(/\\/g, '/'), '/var/log/cue');
+  const rel = buildPyLogEnv({ logDir: 'sessions/logs' }, () => '/ud');
+  assert.equal(rel.CUE_STT_LOG_DIR.replace(/\\/g, '/'), '/ud/sessions/logs');
+});
+
+// ---- Python stderr → Pino forwarding / level preservation (ADR-014) ----
+// The spawned service emits one Loguru JSON object per stderr line. The manager buffers stderr by
+// newlines, parses each with parsePyLogLine, and forwards it through its (injected) logger at
+// mapPyLevelToPino(level) — a Python WARNING becomes a Pino warn — preserving log levels across the
+// process boundary. A pino-shaped recording logger captures the forwarded calls for assertions.
+
+function recordingLogger(sharedCalls) {
+  const calls = sharedCalls || [];
+  function mk(lvl) { return function (o, m) { calls.push({ lvl, o, m }); }; }
+  const log = {
+    trace: mk('trace'), debug: mk('debug'), info: mk('info'),
+    warn: mk('warn'), error: mk('error'), fatal: mk('fatal'),
+    child() { return recordingLogger(calls); }, flush() {},
+  };
+  log._calls = calls;
+  return log;
+}
+
+test('manager forwards a Loguru JSON stderr line through the logger at the matching level', () => {
+  const rec = recordingLogger();
+  const m = createSttProcessManager({
+    spawn: () => null, spawnSync: () => ({ status: 0 }), fs: memFs({}),
+    getPath: () => '/ud', logger: rec,
+    setTimeout: () => 0, clearTimeout: () => {},
+  });
+  m._setVenv({ venvPython: '/v/bin/python', pythonVersion: '3.11.2' });
+  m._setRunning(true);
+
+  const line = JSON.stringify({
+    level: 'WARNING', message: 'model warm', module: 'cue_stt_service', pid: 12,
+    ts: '2026-01-01T00:00:00Z', extra: { model: 'small' },
+  });
+  m._feedStderr(Buffer.from(line + '\n', 'utf8'));
+
+  const ws = rec._calls.filter((c) => c.lvl === 'warn');
+  assert.equal(ws.length, 1, 'exactly one warn forwarded');
+  assert.equal(ws[0].m, 'model warm');
+  assert.equal(ws[0].o.py, true);
+  assert.equal(ws[0].o.pyLevel, 'WARNING', 'original Loguru level preserved in the payload');
+  assert.equal(ws[0].o.pyModule, 'cue_stt_service');
+  assert.equal(ws[0].o.pyExtra.model, 'small');
+});
+
+test('manager forwards a CRITICAL/traceback line at fatal and a non-JSON line at debug', () => {
+  const rec = recordingLogger();
+  const m = createSttProcessManager({
+    spawn: () => null, spawnSync: () => ({ status: 0 }), fs: memFs({}),
+    getPath: () => '/ud', logger: rec,
+    setTimeout: () => 0, clearTimeout: () => {},
+  });
+  m._setVenv({ venvPython: '/v/bin/python', pythonVersion: '3.11.2' });
+  m._setRunning(true);
+
+  const crit = JSON.stringify({ level: 'CRITICAL', message: 'oom', module: 'svc',
+    pid: 1, ts: 't', extra: null, traceback: 'Traceback (most recent call last):\n  boom' });
+  m._feedStderr(Buffer.from(crit + '\n', 'utf8'));
+  const fatals = rec._calls.filter((c) => c.lvl === 'fatal');
+  assert.equal(fatals.length, 1, 'Python CRITICAL → pino fatal');
+  assert.equal(fatals[0].m, 'oom');
+  assert.ok(fatals[0].o.pyTraceback && fatals[0].o.pyTraceback.includes('Traceback'),
+    'traceback carried through to the log');
+
+  m._feedStderr(Buffer.from('numpy: falling back to slow path\n', 'utf8'));
+  const dbg = rec._calls.filter((c) => c.lvl === 'debug' && c.o && c.o.py === true);
+  assert.equal(dbg.length, 1, 'a non-JSON free-form stderr line falls through to debug');
+  assert.ok(typeof dbg[0].m === 'string' && dbg[0].m.includes('numpy'),
+    'the raw line text survives as the message');
+});
+
+test('manager buffers a Python JSON log split across pipe chunks into one forwarded line', () => {
+  // stderr arrives as arbitrary byte chunks; the line framer must reassemble a JSON line split
+  // across chunk boundaries before parsing it as a single record (no half-line JSON parse).
+  const rec = recordingLogger();
+  const m = createSttProcessManager({
+    spawn: () => null, spawnSync: () => ({ status: 0 }), fs: memFs({}),
+    getPath: () => '/ud', logger: rec,
+    setTimeout: () => 0, clearTimeout: () => {},
+  });
+  m._setVenv({ venvPython: '/v/bin/python', pythonVersion: '3.11.2' });
+  m._setRunning(true);
+
+  const full = JSON.stringify({ level: 'ERROR', message: 'partial chunk ok', module: 'svc' });
+  const half = Math.floor(full.length / 2);
+  m._feedStderr(Buffer.from(full.slice(0, half), 'utf8'));   // no newline yet
+  assert.equal(rec._calls.filter((c) => c.lvl === 'error').length, 0, 'not flushed before the newline');
+  m._feedStderr(Buffer.from(full.slice(half) + '\n', 'utf8'));
+  const errs = rec._calls.filter((c) => c.lvl === 'error');
+  assert.equal(errs.length, 1, 'reassembled into exactly one forwarded error line');
+  assert.equal(errs[0].m, 'partial chunk ok');
 });

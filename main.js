@@ -17,6 +17,11 @@ const { createStreamSTT } = require('./src/stt-stream');
 // or an explicit Settings Prepare). Kept off the hot path so batch/external-WS users
 // never pay for it. A single instance is shared with the engine via createStreamSTT.
 const { createSttProcessManager } = require('./src/stt-process');
+// Structured STT logging (Pino singleton — src/stt-logger.js, ADR-014): getSttLogger() builds the
+// shared console + rotating-file root once (idempotent); the manager + the stream STT both derive
+// module-scoped children from it; stopSttLogger() flushes the transport on quit. Created lazily
+// (app.getPath isn't safe before whenReady) so the batch/external-WS paths never pay for it.
+const { getSttLogger, stopSttLogger } = require('./src/stt-logger');
 const { engineMeta } = require('./src/stt-engine');
 const { scanCachedModels } = require('./src/stt-models');
 
@@ -25,11 +30,18 @@ const { scanCachedModels } = require('./src/stt-models');
 let sttManager = null;
 function getSttManager() {
   if (!sttManager) {
+    // Build the shared Pino logger (console + rotating file under userData/logs) from the
+    // persisted + env-overridden settings, once. Thread it AND settings.stt.logging into the
+    // manager: the logger scopes itself per-module (module:'stt-process'); the logging block
+    // becomes CUE_STT_LOG_* env on the spawned Python service (buildPyLogEnv → spawn env).
+    const settings = store.getSettings();
+    getSttLogger(settings);
     sttManager = createSttProcessManager({
       spawn: require('child_process').spawn,
       spawnSync: require('child_process').spawnSync,
       fs,
-      log: (m) => { if (DEBUG) console.log(m); },
+      logger: getSttLogger(settings),
+      logging: settings.stt && settings.stt.logging,
     });
     sttManager.setModelsDir(path.join(app.getPath('userData'), 'stt-models'));
     // Surface manager status + progress to the renderer. Status feeds the capture-stream badge
@@ -232,7 +244,10 @@ function openStreamSessions() {
   // 'local'/'auto-with-local-ready' engine needs the manager; the external 'faster-whisper'
   // and 'batch' transports don't. Passed in so stt-stream resolves local readiness and builds
   // the engine session without importing the manager itself.
-  const stream = createStreamSTT(settings, { localEngineManager: (sttCfg.provider === 'local' || sttCfg.provider === 'auto') ? getSttManager() : undefined });
+  const stream = createStreamSTT(settings, {
+    localEngineManager: (sttCfg.provider === 'local' || sttCfg.provider === 'auto') ? getSttManager() : undefined,
+    logger: getSttLogger(settings),
+  });
   if (stream.available && !sttStreamDisabled) {
     for (const ch of ['you', 'them']) {
       const session = stream.createSession({
@@ -622,7 +637,9 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   // Tear down the managed STT Python process so it never orphans on quit. `stop()`
   // sends the service a shutdown, closes stdin, then kills after a grace — harmless
-  // if the manager was never started (no child).
+  // if the manager was never started (no child). Then flush the Pino transport
+  // (src/stt-logger.js) so the rotating-file worker drains before the process exits.
   if (sttManager) { try { sttManager.stop(); } catch { /* best-effort */ } }
+  stopSttLogger();
 });
 app.on('window-all-closed', () => app.quit());

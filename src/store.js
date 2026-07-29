@@ -65,7 +65,20 @@ const DEFAULTS = {
     },
     fasterWhisperURL: '',          // external (user-run) WS server; '' → not configured
     deepgramURL: 'wss://api.deepgram.com/v1/listen',
-    model: '' // OpenAI Whisper model name for the batch path (default 'whisper-1' in stt.js)
+    model: '', // OpenAI Whisper model name for the batch path (default 'whisper-1' in stt.js)
+    // Structured STT logging (Pino on the Node side, Loguru in the spawned Python
+    // service — src/stt-logger.js / python/cue_stt_logging.py, ADR-014). `logDir` '' →
+    // userData/logs (resolved lazily by the logger, so store.load() needs no Electron).
+    // Rotation: size-based when sizeBytes is set, else daily; count keeps N rotated
+    // files. All fields have CUE_STT_LOG_* runtime overrides (never persisted to disk).
+    logging: {
+      level: 'info',            // debug|info|warn|error|fatal (maps to Python too)
+      logDir: '',               // '' → userData/logs (relative resolves under userData)
+      console: true,            // console logging on/off
+      file: true,               // rotating file on/off
+      pretty: true,             // pretty console (false → compact JSON stdout)
+      rotate: { sizeBytes: 5_242_880, count: 5 },  // size-based when sizeBytes set; else daily
+    },
   }
 };
 
@@ -155,7 +168,17 @@ const ENV_OVERRIDES = {
   CUE_STT_LOCAL_LANGUAGE: ['stt', 'local', 'language'],
   CUE_STT_LOCAL_VAD: ['stt', 'local', 'vad'],
   CUE_FASTER_WHISPER_URL: ['stt', 'fasterWhisperURL'],
-  CUE_DEEPGRAM_URL: ['stt', 'deepgramURL']
+  CUE_DEEPGRAM_URL: ['stt', 'deepgramURL'],
+  // STT logging (ADR-014): Pino (Node) + Loguru (Python). Runtime-only, never
+  // persisted — same rule as every other CUE_* override. Booleans/ints arrive as
+  // strings; src/stt-logger.js coerces before use.
+  CUE_STT_LOG_LEVEL: ['stt', 'logging', 'level'],
+  CUE_STT_LOG_DIR: ['stt', 'logging', 'logDir'],
+  CUE_STT_LOG_CONSOLE: ['stt', 'logging', 'console'],
+  CUE_STT_LOG_FILE: ['stt', 'logging', 'file'],
+  CUE_STT_LOG_PRETTY: ['stt', 'logging', 'pretty'],
+  CUE_STT_LOG_ROTATE_SIZE: ['stt', 'logging', 'rotate', 'sizeBytes'],
+  CUE_STT_LOG_ROTATE_COUNT: ['stt', 'logging', 'rotate', 'count'],
 };
 
 function applyEnvOverrides(data) {
