@@ -268,11 +268,20 @@ button:focus { outline: none; }
   background: rgba(0,0,0,0.35); backdrop-filter: blur(4px);
 }
 #settings-scrim.hidden { display: none; }
-#settings { width: min(440px, 92vw); max-height: calc(100vh - 40px); padding: 18px 20px; display: flex; flex-direction: column; -webkit-app-region: no-drag; }
+#settings { width: min(560px, 94vw); max-height: calc(100vh - 40px); padding: 18px 20px; display: flex; flex-direction: column; -webkit-app-region: no-drag; }
 .s-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex: 0 0 auto; }
 .s-title { font-size: 17px; font-weight: 600; color: var(--tx-1); }
 .s-close { border: none; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: var(--r-pill); cursor: pointer; }
-.s-body { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
+/* Tabbed layout: left nav + scrolling page column. Each .s-page reuses the .s-* blocks below. */
+.s-shell { flex: 1 1 auto; display: flex; gap: 14px; min-height: 0; }
+.s-nav { flex: 0 0 140px; display: flex; flex-direction: column; gap: 2px; padding: 2px 0; border-right: 1px solid var(--bd-hair); }
+.s-nav-btn { text-align: left; border: none; background: transparent; color: var(--tx-mut); font: 500 13px var(--font); padding: 7px 10px; border-radius: var(--r-8); cursor: pointer; transition: all 140ms ease; }
+.s-nav-btn:hover { background: rgba(255,255,255,0.06); color: var(--tx-2); }
+.s-nav-btn.active { color: #fff; background: rgba(60,131,245,0.16); }
+.s-pages { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.s-page { display: flex; flex-direction: column; gap: 8px; }
+.s-page:not(.active) { display: none; }
+.s-foot { flex: 0 0 auto; }
 .s-label { color: var(--tx-2); font-size: 13px; font-weight: 600; margin-top: 8px; }
 .s-hint { color: var(--tx-mut); font-weight: 400; font-size: 11px; margin-left: 6px; }
 .s-seg { display: flex; gap: 6px; }

@@ -1,4 +1,8 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
+// Pure, electron-free settings shaper for the Assistant-style (pre-prompt) control. Exposed as
+// synchronous contextBridge pass-throughs (NOT IPC channels — no three-leg wiring needed) so the
+// browser-side renderer.js shares one canonical, test-covered implementation with main.
+const { getPrePromptChoice, buildPrePromptOverride } = require('./src/preprompt');
 
 contextBridge.exposeInMainWorld('cue', {
   setZoomLevel: (level) => webFrame.setZoomLevel(level),
@@ -24,6 +28,11 @@ contextBridge.exposeInMainWorld('cue', {
   sttModelDownload: (model) => ipcRenderer.invoke('stt:model:download', model),
   sttModelDelete: (model) => ipcRenderer.invoke('stt:model:delete', model),
   sttEngineList: () => ipcRenderer.invoke('stt:engine:list'),
+  // Assistant-style seg ↔ settings.promptOverrides.prePrompt shaping (src/preprompt.js). Sync,
+  // pure — no IPC round-trip. The renderer has no Node `require`, so this is how it reaches the
+  // same canonical helper main's composeSystem resolves with (resolveField('prePrompt')).
+  getPrePromptChoice: (settings) => getPrePromptChoice(settings),
+  buildPrePromptOverride: (selection) => buildPrePromptOverride(selection),
   on: (channel, cb) => {
     // Three legs (preload allowlist + main handler + renderer consumer) per .claude/docs/
     // conventions.md. stt:progress carries venv-install / model-download phases + a 'done'

@@ -16,61 +16,40 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 *next*; it is not a transcript.
 
 ## Branch
-- `fix/stt-transcription-timeout` (off `main`). Goal: **Priority 1 — fix transcription** so
-  local Python / OpenAI / Gemini all transcribe the same captured audio with no silent timeouts
-  and actionable errors; follows the 8-priority overhaul plan at
-  [`.claude/plans/cue-fix-plan.md`](../plans/cue-fix-plan.md).
+- `fix/stt-transcription-timeout` (off `main`). An 8-priority overhaul at
+  [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md). **P1–P2 committed**; **P3 in flight**.
 
 ## Completed (committed)
-- **P1 — transcription root-cause fixes** (commit `be96ab6`): decouple model download from load
-  (download first with progress → cache-only load, finite 120s timeout); pre-sid bounded PCM ring
-  (D2); mid-capture channel degradation to batch in-session (D3); 30s batch/cloud transcribe
-  watchdog releasing the channel lock (D4/D5); actionable provider-specific error surfacing (D6);
-  auto-prepare the venv on first capture for `provider:'local'` (D9); `main.js` wired to a
-  `sttChild('main-stt')` structured logger. Python `load()` gained `local_files_only`. New
-  `scripts/stt-test-providers.js` (+ `npm run stt:test-providers`) feeds one WAV through every
-  provider. **206/206 tests pass.**
+- **P1 — transcription root-cause fixes** (`be96ab6`): decouple model download from load (download
+  first with progress → cache-only load, finite 120s timeout); pre-sid bounded PCM ring; mid-capture
+  channel degradation to batch in-session; 30s batch/cloud transcribe watchdog releasing the channel
+  lock; actionable provider-specific error surfacing; auto-prepare the venv on first capture for
+  `provider:'local'`; `scripts/stt-test-providers.js` (+ `npm run stt:test-providers`). ADR-014/ADR-016.
+- **P2 — generalized logging** (`b46163b` → `a96f256` → `bc1e89a`): Pino (Node) + Loguru (Python)
+  centralized, app-wide singleton; migrated the ~39 `console.*` in main/llm to the structured logger
+  (terminal fd 2 + dated rotating files). No stray `console.log` outside intentional transport fallbacks.
 
-## In flight
-- **P1 — docs.** ADR-014 (logging) + ADR-016 (no silent timeouts) added to
-  [decisions](decisions.md) (ADR-015 reserved for P8); [architecture](architecture.md) STT/engine
-  + main.js-wiring sections updated; this file + [context-summary](context-summary). Not yet
-  committed.
+## In flight (uncommitted)
+- **P3 — Settings redesign as categorized tabs.** Rebuilt the single scrolling panel into a left-nav
+  tabbed shell — **Providers · Transcription · Models · Context · Shortcuts** — preserving every field
+  and the `fillSettings`/`saveSettings` contract (only the container/navigation changes; entry points
+  stable). Also fixes a latent storage-coherence bug: the Assistant-style seg was reading the deleted
+  legacy `settings.prePrompt`/`prePromptTemplate` keys, so it always showed "Concise" on reopen; it now
+  reads/writes the live `settings.promptOverrides.prePrompt` home via a new electron-free
+  [src/preprompt.js](../../src/preprompt.js) (`getPrePromptChoice`/`buildPrePromptOverride`, tested in
+  `test/preprompt.test.js`, exposed to the renderer as synchronous preload contextBridge pass-throughs —
+  not new IPC). **217/217 tests pass.** Docs refresh below is part of the commit.
 
 ## Next
-1. Commit P1 docs, then verify P1 end-to-end (user runs `npm run stt:setup` + the manual
-   checklist below — can't be done headless).
-2. **P2** — migrate the remaining ~39 `console.*` in main/llm to the structured logger (the STT
-   transport already exists; generalize beyond STT).
-3. **P3** — Settings as categorized tabs (Providers · Whisper · Model · Memory · Audio · Screen ·
-   Shortcuts · Advanced), preserving every field.
-4. Then P4 (mute/unmute), P5 (screen perms), P6 (notifications), P7 (CI/build/Docker), P8 (.env
-   retirement, ADR-015). See [`cue-fix-plan.md`](../plans/cue-fix-plan).
-
-### P1 manual verification checklist (the user runs this)
-```
-npm test                 # 206/206 green (CI half)
-npm run stt:setup        # one-time venv (or let auto-prepare do it on first capture)
-npm start                # then in the overlay:
-  - Settings → Speech-to-Text → Provider: local → toggle listening → say a few words
-    Expect: "starting…" badge → "streaming" → a transcript appears (local works)
-  - Provider: auto with an OpenAI key, no venv → batch path transcribes (OpenAI works)
-  - Provider: auto with a Gemini key only → batch transcribes (Gemini works)
-  - Kill a cloud key / pull network → expect an actionable status, NOT a silent hang
-node scripts/stt-test-providers.js ./sample.wav   # same audio via all three, no mic
-```
+1. **Commit P3** (`feat(ui): categorized settings tabs`) — `npm test` already green; manual UI check
+   (the user, not headless).
+2. **P4** — Mute/Unmute recording control reflecting real capture/STT state (depends on P1).
+3. Then P5 (screen perms), P6 (notifications), P7 (CI/build/Docker), P8 (retire .env + ADR-015).
 
 ## Blockers / open questions
-- None hard-blocking. **Cannot verify live transcription headless** (no audio hardware, no keys,
-  no Electron) — P1's "works for all three providers" success criterion requires the user's machine.
+- P3's "every field reachable, seg reflects saved choice" needs the user's machine (headless Electron
+  can't open the panel); tests cover only the extracted helper. The manual checklist is in the plan.
 
-## Session discoveries (in flight — promote at commit, then clear)
-- **The local-vs-cloud failure modes were structurally separate but presented identically.** The
-  `auto` transport gates the local engine on `manager.isVenvReady()`, and `getSttManager()` only
-  *creates* the manager (never bootstraps the venv) — so on `auto` with no venv + no WS URL the
-  pipeline silently falls to the band batch path, while `provider:'local'` with no venv dropped
-  everything. Diagnosis required reading the *whole* pipeline, not one provider. (Promote to
-  [memory.md](memory.md) at commit.)
-- `load` at `timeout:0` + `local_files_only=False` was the single highest-impact defect: a silent
-  download blocked `stream_start` forever and dropped all PCM. Decoupling download from load was
-  the real fix; raising timeouts would have changed nothing.
+## Session discoveries
+- (Promoted to [memory.md](memory.md) at commit — the preload-contextBridge-pass-through precedent and
+  the not-wired `prompts:registry` note.)

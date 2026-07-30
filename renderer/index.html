@@ -55,137 +55,160 @@
     </div>
   </div>
 
-  <!-- Settings -->
+  <!-- Settings (categorized tabs — see src/preprompt.js for the assistant-style shape) -->
   <div id="settings-scrim" class="hidden">
     <div id="settings" class="glass">
       <div class="s-head">
         <div class="s-title">Settings</div>
         <button id="s-close" class="s-close">Done</button>
       </div>
-      <div class="s-body">
-        <label class="s-label">Provider</label>
-        <div class="s-seg" id="provider-seg">
-          <button data-provider="openai">OpenAI</button>
-          <button data-provider="anthropic">Anthropic</button>
-          <button data-provider="gemini">Gemini</button>
-          <button data-provider="nvidia">Nvidia</button>
-          <button data-provider="ollama">Ollama</button>
-        </div>
+      <div class="s-shell">
+        <nav class="s-nav" id="s-nav">
+          <button class="s-nav-btn active" data-tab="providers">Providers</button>
+          <button class="s-nav-btn" data-tab="transcription">Transcription</button>
+          <button class="s-nav-btn" data-tab="models">Models</button>
+          <button class="s-nav-btn" data-tab="context">Context</button>
+          <button class="s-nav-btn" data-tab="shortcuts">Shortcuts</button>
+        </nav>
+        <div class="s-pages">
+          <!-- Providers -->
+          <section class="s-page active" data-tab="providers">
+            <label class="s-label">Provider</label>
+            <div class="s-seg" id="provider-seg">
+              <button data-provider="openai">OpenAI</button>
+              <button data-provider="anthropic">Anthropic</button>
+              <button data-provider="gemini">Gemini</button>
+              <button data-provider="nvidia">Nvidia</button>
+              <button data-provider="ollama">Ollama</button>
+            </div>
 
-        <label class="s-label">API keys <span class="s-hint">stored locally in cue-data.json</span></label>
-        <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field"><span>Nvidia</span><input id="key-nvidia" type="password" placeholder="nvapi-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Ollama</span><input id="key-ollama" type="password" placeholder="No key needed (local)" autocomplete="off" disabled /></div>
+            <label class="s-label">API keys <span class="s-hint">stored locally in cue-data.json</span></label>
+            <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
+            <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
+            <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
+            <div class="s-field"><span>Nvidia</span><input id="key-nvidia" type="password" placeholder="nvapi-..." autocomplete="off" /></div>
+            <div class="s-field"><span>Ollama</span><input id="key-ollama" type="password" placeholder="No key needed (local)" autocomplete="off" disabled /></div>
 
-        <label class="s-label" for="ollama-baseurl">Ollama base URL <span class="s-hint">OpenAI-compatible /v1 endpoint of your local <code>ollama serve</code></span></label>
-        <div class="s-field"><span>URL</span><input id="ollama-baseurl" type="text" placeholder="http://localhost:11434/v1" autocomplete="off" /></div>
+            <label class="s-label" for="ollama-baseurl">Ollama base URL <span class="s-hint">OpenAI-compatible /v1 endpoint of your local <code>ollama serve</code></span></label>
+            <div class="s-field"><span>URL</span><input id="ollama-baseurl" type="text" placeholder="http://localhost:11434/v1" autocomplete="off" /></div>
+          </section>
 
-        <label class="s-label" for="resume-context">Résumé / professional background <span class="s-hint">stored locally; sent to your selected provider with each request</span></label>
-        <textarea id="resume-context" class="s-textarea" maxlength="12000" placeholder="Paste your résumé or professional background here. cue will use it as the factual source for career-related answers."></textarea>
-        <div class="s-resume-actions"><span class="s-hint">Maximum 12,000 characters</span><button id="clear-resume" type="button">Clear résumé</button></div>
+          <!-- Transcription (full STT block: master toggle → diagnostics) -->
+          <section class="s-page" data-tab="transcription">
+            <label class="s-label">Speech-to-Text <span class="s-hint">local transcription; managed Python service</span></label>
+            <div class="s-seg" id="stt-enabled-seg">
+              <button data-stt-enabled="on">On</button>
+              <button data-stt-enabled="off">Off</button>
+            </div>
+            <div class="s-field">
+              <span>Transport</span>
+              <select id="stt-provider" class="s-select">
+                <option value="auto">Auto (local → external → batch)</option>
+                <option value="local">Local (managed engine)</option>
+                <option value="faster-whisper">External (own WS server)</option>
+                <option value="batch">Batch (cloud) only</option>
+              </select>
+            </div>
+            <div class="s-field">
+              <span>Engine</span>
+              <select id="stt-engine" class="s-select"></select>
+            </div>
+            <div class="s-field">
+              <span>Model</span>
+              <select id="stt-model" class="s-select"></select>
+              <button id="stt-model-download" class="stt-mini" type="button">Download</button>
+              <button id="stt-model-delete" class="stt-mini" type="button">Delete</button>
+            </div>
+            <div class="s-resume-actions"><span class="s-hint" id="stt-model-status"></span><button id="stt-prepare" type="button">Prepare service</button></div>
+            <div class="s-seg" id="stt-device-seg">
+              <button data-device="auto">Auto</button>
+              <button data-device="cpu">CPU</button>
+              <button data-device="cuda">CUDA</button>
+            </div>
+            <div class="s-field"><span>Compute</span>
+              <select id="stt-compute" class="s-select">
+                <option value="int8">int8</option>
+                <option value="int8_float16">int8_float16</option>
+                <option value="float16">float16</option>
+                <option value="float32">float32</option>
+              </select>
+            </div>
+            <div class="s-field"><span>Language</span>
+              <select id="stt-language" class="s-select">
+                <option value="auto">Auto-detect</option>
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="it">Italian</option>
+                <option value="pt">Portuguese</option>
+                <option value="hi">Hindi</option>
+                <option value="ja">Japanese</option>
+                <option value="zh">Chinese</option>
+                <option value="ko">Korean</option>
+              </select>
+            </div>
+            <div class="s-field"><span>VAD</span>
+              <div class="s-seg" id="stt-vad-seg">
+                <button data-vad="on">On</button>
+                <button data-vad="off">Off</button>
+              </div>
+            </div>
+            <div class="s-field"><span>External URL</span>
+              <input id="stt-fw-url" type="text" placeholder="ws://localhost:9080/stream (only for External)" autocomplete="off" />
+            </div>
+            <div class="s-diagnostics" id="stt-diagnostics"></div>
+          </section>
 
-        <label class="s-label">Assistant style <span class="s-hint">how cue frames its help; sent first in every system prompt</span></label>
-        <div class="s-seg" id="preprompt-seg">
-          <button data-preprompt="concise">Concise</button>
-          <button data-preprompt="interview">Interview</button>
-          <button data-preprompt="engineer">Engineer</button>
-          <button data-preprompt="copilot">Copilot</button>
-          <button data-preprompt="custom">Custom</button>
-        </div>
-        <textarea id="preprompt-custom" class="s-textarea" maxlength="1000" placeholder="Custom instructions: who cue is to you and how it should help. Used when 'Custom' is selected."></textarea>
+          <!-- Models (LLM tiers for the active provider) -->
+          <section class="s-page" data-tab="models">
+            <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
+            <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
+            <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
+          </section>
 
-        <label class="s-label">Skills <span class="s-hint">.claude/skills/*.md in a project dir, applied as behavioral guidance</span></label>
-        <div class="s-seg" id="skill-seg">
-          <button data-skill="on">On</button>
-          <button data-skill="off">Off</button>
-        </div>
-        <div class="s-field"><span>Dir</span><input id="skill-dir" type="text" placeholder="/path/to/project" autocomplete="off" /></div>
-        <div class="s-resume-actions"><span class="s-hint" id="skill-status"></span><button id="skill-reload" type="button">Reload skills</button></div>
+          <!-- Context (assistant style + résumé + skills + memory notes) -->
+          <section class="s-page" data-tab="context">
+            <label class="s-label">Assistant style <span class="s-hint">how cue frames its help; sent first in every system prompt</span></label>
+            <div class="s-seg" id="preprompt-seg">
+              <button data-preprompt="concise">Concise</button>
+              <button data-preprompt="interview">Interview</button>
+              <button data-preprompt="engineer">Engineer</button>
+              <button data-preprompt="copilot">Copilot</button>
+              <button data-preprompt="custom">Custom</button>
+            </div>
+            <textarea id="preprompt-custom" class="s-textarea" maxlength="1000" placeholder="Custom instructions: who cue is to you and how it should help. Used when 'Custom' is selected."></textarea>
 
-        <label class="s-label">Memory notes <span class="s-hint">things cue should remember; stored locally in cue-data.json</span></label>
-        <textarea id="memory-notes" class="s-textarea" maxlength="4000" placeholder="Anything you want cue to keep in mind: preferences, ongoing context, people, deadlines..."></textarea>
-        <div class="s-resume-actions"><span class="s-hint">Maximum 4,000 characters</span></div>
+            <label class="s-label" for="resume-context">Résumé / professional background <span class="s-hint">stored locally; sent to your selected provider with each request</span></label>
+            <textarea id="resume-context" class="s-textarea" maxlength="12000" placeholder="Paste your résumé or professional background here. cue will use it as the factual source for career-related answers."></textarea>
+            <div class="s-resume-actions"><span class="s-hint">Maximum 12,000 characters</span><button id="clear-resume" type="button">Clear résumé</button></div>
 
-        <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
-        <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
-        <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
+            <label class="s-label">Skills <span class="s-hint">.claude/skills/*.md in a project dir, applied as behavioral guidance</span></label>
+            <div class="s-seg" id="skill-seg">
+              <button data-skill="on">On</button>
+              <button data-skill="off">Off</button>
+            </div>
+            <div class="s-field"><span>Dir</span><input id="skill-dir" type="text" placeholder="/path/to/project" autocomplete="off" /></div>
+            <div class="s-resume-actions"><span class="s-hint" id="skill-status"></span><button id="skill-reload" type="button">Reload skills</button></div>
 
-        <label class="s-label">Keyboard shortcuts</label>
-        <div class="s-shortcut">
-          <span>Assist</span>
-          <button id="shortcut-assist" class="shortcut-record" type="button" aria-label="Change Assist shortcut"></button>
-          <button id="shortcut-reset" class="shortcut-reset" type="button">Reset</button>
-        </div>
-        <div class="shortcut-hint" id="shortcut-hint">Click the shortcut, then press a new key combination.</div>
+            <label class="s-label">Memory notes <span class="s-hint">things cue should remember; stored locally in cue-data.json</span></label>
+            <textarea id="memory-notes" class="s-textarea" maxlength="4000" placeholder="Anything you want cue to keep in mind: preferences, ongoing context, people, deadlines..."></textarea>
+            <div class="s-resume-actions"><span class="s-hint">Maximum 4,000 characters</span></div>
+          </section>
 
-        <label class="s-label">Speech-to-Text <span class="s-hint">local transcription; managed Python service</span></label>
-        <div class="s-seg" id="stt-enabled-seg">
-          <button data-stt-enabled="on">On</button>
-          <button data-stt-enabled="off">Off</button>
+          <!-- Shortcuts -->
+          <section class="s-page" data-tab="shortcuts">
+            <label class="s-label">Keyboard shortcuts</label>
+            <div class="s-shortcut">
+              <span>Assist</span>
+              <button id="shortcut-assist" class="shortcut-record" type="button" aria-label="Change Assist shortcut"></button>
+              <button id="shortcut-reset" class="shortcut-reset" type="button">Reset</button>
+            </div>
+            <div class="shortcut-hint" id="shortcut-hint">Click the shortcut, then press a new key combination.</div>
+          </section>
         </div>
-        <div class="s-field">
-          <span>Transport</span>
-          <select id="stt-provider" class="s-select">
-            <option value="auto">Auto (local → external → batch)</option>
-            <option value="local">Local (managed engine)</option>
-            <option value="faster-whisper">External (own WS server)</option>
-            <option value="batch">Batch (cloud) only</option>
-          </select>
-        </div>
-        <div class="s-field">
-          <span>Engine</span>
-          <select id="stt-engine" class="s-select"></select>
-        </div>
-        <div class="s-field">
-          <span>Model</span>
-          <select id="stt-model" class="s-select"></select>
-          <button id="stt-model-download" class="stt-mini" type="button">Download</button>
-          <button id="stt-model-delete" class="stt-mini" type="button">Delete</button>
-        </div>
-        <div class="s-resume-actions"><span class="s-hint" id="stt-model-status"></span><button id="stt-prepare" type="button">Prepare service</button></div>
-        <div class="s-seg" id="stt-device-seg">
-          <button data-device="auto">Auto</button>
-          <button data-device="cpu">CPU</button>
-          <button data-device="cuda">CUDA</button>
-        </div>
-        <div class="s-field"><span>Compute</span>
-          <select id="stt-compute" class="s-select">
-            <option value="int8">int8</option>
-            <option value="int8_float16">int8_float16</option>
-            <option value="float16">float16</option>
-            <option value="float32">float32</option>
-          </select>
-        </div>
-        <div class="s-field"><span>Language</span>
-          <select id="stt-language" class="s-select">
-            <option value="auto">Auto-detect</option>
-            <option value="en">English</option>
-            <option value="es">Spanish</option>
-            <option value="fr">French</option>
-            <option value="de">German</option>
-            <option value="it">Italian</option>
-            <option value="pt">Portuguese</option>
-            <option value="hi">Hindi</option>
-            <option value="ja">Japanese</option>
-            <option value="zh">Chinese</option>
-            <option value="ko">Korean</option>
-          </select>
-        </div>
-        <div class="s-field"><span>VAD</span>
-          <div class="s-seg" id="stt-vad-seg">
-            <button data-vad="on">On</button>
-            <button data-vad="off">Off</button>
-          </div>
-        </div>
-        <div class="s-field"><span>External URL</span>
-          <input id="stt-fw-url" type="text" placeholder="ws://localhost:9080/stream (only for External)" autocomplete="off" />
-        </div>
-        <div class="s-diagnostics" id="stt-diagnostics"></div>
-
-        <div class="s-status" id="s-status"></div>
       </div>
+      <div class="s-foot"><div class="s-status" id="s-status"></div></div>
     </div>
   </div>
 

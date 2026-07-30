@@ -483,6 +483,17 @@
   $('#s-close').addEventListener('click', closeSettings);
   scrim.addEventListener('click', (e) => { if (e.target === scrim) closeSettings(); });
 
+  // Settings tab navigation. The active tab is whichever nav button / page carries `.active`
+  // (Providers is set active in index.html; a click toggles it). openSettings leaves the
+  // last-active tab in place, so reopens drop you where you left off — no state to persist.
+  $('#s-nav').addEventListener('click', (e) => {
+    const btn = e.target.closest('.s-nav-btn');
+    if (!btn) return;
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('#s-nav .s-nav-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('#settings .s-page').forEach((p) => p.classList.toggle('active', p.dataset.tab === tab));
+  });
+
   function fillSettings() {
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
     $('#key-openai').value = settings.apiKeys.openai || '';
@@ -491,14 +502,14 @@
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
     $('#ollama-baseurl').value = (settings.ollama && settings.ollama.baseURL) || '';
     $('#resume-context').value = settings.resumeContext || '';
-    // Assistant style: "Custom" is the effective selection whenever custom text is set, so the seg
-    // reflects what composeSystem actually uses (resolvePrePrompt: custom text wins over template).
-    const usingCustom = !!(settings.prePrompt && settings.prePrompt.trim());
-    const pp = usingCustom ? 'custom' : (settings.prePromptTemplate || 'concise');
-    document.querySelectorAll('#preprompt-seg button').forEach((b) => b.classList.toggle('on', b.dataset.preprompt === pp));
+    // Assistant style: read the live promptOverrides.prePrompt home (the legacy top-level
+    // prePrompt/prePromptTemplate were folded here by store.js on load — never read them). The
+    // helper mirrors resolvePrePrompt's precedence so the seg reflects what composeSystem sends.
+    const choice = cue.getPrePromptChoice(settings);
+    document.querySelectorAll('#preprompt-seg button').forEach((b) => b.classList.toggle('on', b.dataset.preprompt === choice.option));
     const customArea = $('#preprompt-custom');
-    customArea.value = usingCustom ? settings.prePrompt : '';
-    customArea.style.display = (pp === 'custom') ? '' : 'none';
+    customArea.value = choice.option === 'custom' ? choice.text : '';
+    customArea.style.display = (choice.option === 'custom') ? '' : 'none';
     // Skills: On/Off seg + dir; status is the reload button's transient hint, cleared on open.
     const skillOn = settings.skillEnabled !== false;
     document.querySelectorAll('#skill-seg button').forEach((b) => b.classList.toggle('on', (b.dataset.skill === 'on') === skillOn));
@@ -557,10 +568,11 @@
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
     settings.ollama = { baseURL: $('#ollama-baseurl').value.trim() };
     settings.resumeContext = $('#resume-context').value.trim();
-    // Pre-prompt: a built-in template clears the custom textarea; "Custom" uses the textarea text.
-    const pp = [...document.querySelectorAll('#preprompt-seg button.on')].map((b) => b.dataset.preprompt)[0] || 'concise';
-    settings.prePromptTemplate = pp;
-    settings.prePrompt = (pp === 'custom') ? $('#preprompt-custom').value.trim() : '';
+    // Pre-prompt: write the live promptOverrides.prePrompt home (the only override composeSystem
+    // reads); the legacy top-level keys are no longer touched.
+    const ppOption = [...document.querySelectorAll('#preprompt-seg button.on')].map((b) => b.dataset.preprompt)[0] || 'concise';
+    if (!settings.promptOverrides) settings.promptOverrides = {};
+    settings.promptOverrides.prePrompt = cue.buildPrePromptOverride({ option: ppOption, customText: $('#preprompt-custom').value });
     // Skills: On/Off gate + project dir. The On/Off state is read from the seg so the user's last
     // click is what persists, regardless of the loaded default.
     const skillOn = [...document.querySelectorAll('#skill-seg button.on')].map((b) => b.dataset.skill)[0] === 'on';

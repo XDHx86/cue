@@ -26,15 +26,14 @@ The central invariant: **the three inputs stay separate and the channel tag pres
 said what"** through transcript → prompt → render.
 
 ## Right now
-- Branch `fix/stt-transcription-timeout`, an 8-priority overhaul plan at
-  [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md). **P1 (fix transcription) is committed**
-  (`be96ab6`): decouple download-from-load + cache-only load + finite timeouts + actionable errors
-  + mid-capture channel degradation (ADR-016). STT logging already centralized (Pino+Loguru, ADR-014).
-  **206/206 tests pass.**
-- **In flight (uncommitted): P1 docs** — ADR-014/ADR-016 added; [architecture](architecture.md) STT
-  + main.js-wiring sections updated; state/plan/this file. Verify with `git diff`.
-- **Next: P2** — migrate the remaining `console.*` in main/llm to the structured logger, then P3
-  (Settings tabs) → P4/P5/P6/P7/P8. [state.md](state.md) has the manual P1 verification checklist.
+- Branch `fix/stt-transcription-timeout`, an 8-priority overhaul at
+  [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md). **P1 (fix transcription) and P2
+  (logging migration) are committed.** **P3 (categorized Settings tabs) is in flight** —
+  the panel is rebuilt as **Providers · Transcription · Models · Context · Shortcuts** (every
+  field preserved; entry points stable), plus a fix so the Assistant-style seg reads/writes
+  the live `promptOverrides.prePrompt` home instead of the deleted legacy keys. **217/217 tests pass.**
+- **Next after P3 commits:** P4 (mute/unmute reflecting real capture/STT state) → P5 (screen perms) →
+  P6 (notifications) → P7 (CI/build/Docker) → P8 (retire .env + ADR-015).
 
 ## Where things live
 - Architecture & seams → [architecture.md](architecture.md) · Coding rules → [conventions.md](conventions.md)
@@ -44,6 +43,8 @@ said what"** through transcript → prompt → render.
 ## Where the work is
 - Current snapshot → [state.md](state.md) — and `git status` / `git diff` for the live tree.
 - The roadmap → [implementation-plan.md](implementation-plan.md) · The 8-priority plan → [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md)
+- Assistant-style shaping helper → [src/preprompt.js](../../src/preprompt.js) (electron-free; the
+  renderer reaches it via a synchronous preload contextBridge pass-through, not IPC).
 
 ## How to behave here
 - **Rewrite, don't append** (see [compression-policy.md](compression-policy.md)).

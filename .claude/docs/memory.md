@@ -38,6 +38,17 @@ rule — it lives there now.
   rAF coalescer.
 - The `mousemove` click-through handler was unthrottled; it is rAF-capped (60 Hz). Throttle
   any new per-frame renderer work the same way.
+- The renderer is a browser `<script>` (an IIFE over `window.cue`) with **no Node `require`**,
+  so it can't import `src/*` directly. To share one canonical, test-covered electron-free helper
+  with it, expose the function as a **synchronous preload `contextBridge` pass-through** (preload
+  does the `require`, hands the pure fn to the page). That is *not* a new IPC channel, so the
+  three-leg invariant is untouched — use it for any future "electron-free helper the renderer also
+  needs" (`src/preprompt.js` is the precedent). Reserve real IPC for state the main process must
+  own/act on, not for pure transforms.
+- `prompts:registry` (`src/prompt-registry.js` `registrySpec()`) is **server-side-ready but not
+  wired**: `main.js` imports it yet there is no `prompts:registry` handler, no preload leg, no
+  renderer consumer. A registry-driven per-mode prompt-editing UI is therefore future work — don't
+  assume the renderer fetches it. `settings.promptOverrides[id]` + `resolveField` is the live path.
 
 ## Windows / overlay
 - Windows' default `setAlwaysOnTop(true)` level sits **below** Zoom's share overlay (and other
