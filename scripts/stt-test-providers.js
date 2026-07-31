@@ -67,19 +67,20 @@ function cloudKeys() {
 function settingsFor(keys) {
   return {
     apiKeys: { openai: keys.openai, gemini: keys.gemini, anthropic: '', nvidia: '', ollama: '', deepgram: '' },
-    stt: { model: '', fasterWhisperURL: '' },
+    stt: { model: '' },
   };
 }
 
-// createSTT builds its chain from available keys; a single-key settings probes ONE cloud
-// provider in isolation (fasterWhisperURL is empty, so the local-first entry never fires).
+// createSTT builds its chain from available keys + a manager. No manager is wired here,
+// so the local-first RPC entry never registers — this probes ONE cloud provider in
+// isolation. (local is exercised separately by probeLocal, which spawns its own manager.)
 async function probeCloud(provider, keys, wav) {
   const key = provider === 'openai' ? keys.openai : (provider === 'gemini' ? keys.gemini : '');
   if (!key) return { skipped: true };
   const settings = {
     apiKeys: { openai: provider === 'openai' ? key : '', gemini: provider === 'gemini' ? key : '',
                anthropic: '', nvidia: '', ollama: '', deepgram: '' },
-    stt: { model: 'whisper-1', fasterWhisperURL: '' },
+    stt: { model: 'whisper-1' },
   };
   const res = await createSTT(settings).transcribe(wav);
   if (res.error) return { error: res.error.message || String(res.error), provider };
@@ -109,8 +110,10 @@ async function main() {
   const userDataPath = opts.dataDir || resolveUserDataDir();
   let want = opts.only || ['local', 'openai', 'gemini'];
 
-  // Provisional: also probe the app's full batch chain order to surface which effective
-  // provider wins (matches the batch flush loop's real selection).
+  // Provisional: also probe the app's cloud batch chain order to surface which cloud
+  // provider wins when local is not in play. No manager is wired here (matching
+  // cloud-only / batch / external-WS users), so the local RPC entry never registers;
+  // local is exercised separately by probeLocal.
   const chain = createSTT(settingsFor(keys));
 
   let allOk = true;

@@ -51,6 +51,27 @@ function engineMeta() {
   return [...engines.keys()].map((id) => ({ id, ...(ENGINE_META[id] || { label: id }) }));
 }
 
+// Shared source of truth for the managed Python engine's `load` params, derived from
+// settings.stt.local (model/device/computeType/vad) + the manager's models dir. Used by
+// BOTH the streaming session (below) and the batch provider (src/stt.js) so a batch call
+// that follows a streaming load reuses the SAME params and skips a redundant reload.
+// `language` is null-uniform: the streaming path always carries null (auto-detect) and the
+// batch path matches it so the params compare equal against manager.getLastLoad().
+function localLoadParams(settings, manager, language = null) {
+  const cfg = (settings && settings.stt && settings.stt.local) || {};
+  return {
+    name: cfg.model || 'small',
+    device: cfg.device || 'auto',
+    compute_type: cfg.computeType || 'auto', // snake_case for the Python service
+    language: language === undefined ? null : language,
+    vad: cfg.vad !== false,
+    download_root: manager && manager.getModelsDir ? manager.getModelsDir() : undefined,
+    // Cache-only load: the host pre-downloads via model_download (which emits progress), so
+    // load() can NEVER block on a silent network fetch — the old infinite-timeout hang.
+    local_files_only: true,
+  };
+}
+
 // ---- local faster-whisper session (the registered engine) ---------------
 // `settings` is carried so start() reads stt.local.{model,device,computeType,vad} and
 // re-loads when the user changes them. `manager` is the createSttProcessManager instance.
@@ -70,18 +91,7 @@ class LocalFasterWhisperSession {
   }
 
   _loadParams() {
-    const cfg = (this.settings.stt && this.settings.stt.local) || {};
-    return {
-      name: cfg.model || 'small',
-      device: cfg.device || 'auto',
-      compute_type: cfg.computeType || 'auto', // snake_case for the Python service
-      language: this.language,
-      vad: cfg.vad !== false,
-      download_root: this.manager.getModelsDir(),
-      // Cache-only load: the host pre-downloads via model_download (which emits progress), so
-      // load() can NEVER block on a silent network fetch — the old infinite-timeout hang.
-      local_files_only: true,
-    };
+    return localLoadParams(this.settings, this.manager, this.language);
   }
 
   // Cheap filesystem check (the Python service's models_list is an os.path.isdir scan, no model
@@ -197,6 +207,6 @@ registerEngine('faster-whisper', (opts) => {
 
 module.exports = {
   registerEngine, listEngines, hasEngine, createEngineSession, engineMeta,
-  LocalFasterWhisperSession,
+  localLoadParams, LocalFasterWhisperSession,
   MODEL_DOWNLOAD_TIMEOUT_MS, MODEL_LOAD_TIMEOUT_MS, PRE_SID_BYTES,
 };

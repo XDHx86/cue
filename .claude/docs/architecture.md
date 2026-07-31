@@ -63,10 +63,18 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
 
 ## STT — managed local engine, engine-agnostic seam (ADR-002, ADR-013)
 
-- **Batch (cloud)** — [src/stt.js](../../src/stt.js): `createSTT(settings)` builds a fallback
-  chain from audio-capable keys (openai → gemini). Separate from LLM because Anthropic has no
-  audio API (ADR-002). A `sttDisabled` latch in [main.js](../../main.js) stops retry spam once the
-  chain returns 403/401/`model_not_found`.
+- **Batch** — [src/stt.js](../../src/stt.js): `createSTT(settings, { manager, logger })` builds a
+  fallback chain ordered **local-first, then cloud** (faster-whisper → openai → gemini). The local
+  entry reuses the SAME managed Python process + JSON-RPC client as the streaming engine below,
+  calling the service's `transcribe` method directly over stdin/stdout — no HTTP server, no
+  `fasterWhisperURL` (that field now only selects the *external* user-run WS server in the streaming
+  resolver). It registers only when the shared manager reports `isVenvReady()`, so cloud-only /
+  external-WS / un-provisioned users never spin Python; a model not already loaded (the common case
+  after a streaming degrade is already loaded via `getLastLoad`) loads cache-only and either
+  succeeds fast or raises → the chain falls to the next provider. Debug logs at provider
+  registration, RPC request/response, and per-provider transcription timing. Separate from LLM
+  because Anthropic has no audio API (ADR-002). A `sttDisabled` latch in [main.js](../../main.js)
+  stops retry spam once the chain returns 403/401/`model_not_found`.
 - **Streaming** — [src/stt-stream.js](../../src/stt-stream.js): `createStreamSTT(settings,
   { localEngineManager })` is the routing layer. It resolves the transport from `settings.stt.provider`
   (`auto` → local if the manager reports ready, else external WS URL if set, else null/batch; `local`
@@ -79,7 +87,10 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
   cached, **then loads with `local_files_only=true`** under a finite timeout, then `stream_start`
   → sid → forward per-sid partial/final → `stream_stop`. Load is cache-only so it can never stall
   on a silent network fetch (the old infinite-timeout hang). Audio captured before `sid` is set is
-  held in a bounded ~2s pre-sid ring and flushed on first `sendAudio`. Adding a second local engine
+  held in a bounded ~2s pre-sid ring and flushed on first `sendAudio`. `localLoadParams(settings,
+  manager, language)` is the shared source of truth for `stt.local.*` → Python load params, reused
+  by the batch provider in [src/stt.js](../../src/stt.js) so a batch call that follows a streaming
+  load reuses the SAME params and skips a redundant reload. Adding a second local engine
   (whisper.cpp) is one `registerEngine` call implementing that surface — **main.js and stt-stream.js
   never name an engine**.
 - **Managed process** — [src/stt-process.js](../../src/stt-process.js): `createSttProcessManager`

@@ -203,7 +203,16 @@ async function flushChannel(channel) {
       pcmBytes: pcm?.length,
     }, 'Loading STT provider');
 
-    const stt = createSTT(settings);
+    const sttProvider = settings.stt && settings.stt.provider;
+    // The managed Python engine handles the batch fallback too when it applies
+    // (provider 'local'/'auto'): reuse the SAME shared manager the streaming path
+    // uses (openStreamSessions) so a degraded channel transcribes via the service's
+    // transcribe RPC instead of the obsolete HTTP POST. 'batch' and the external
+    // 'faster-whisper' WS provider don't pass the manager — they fall to cloud keys.
+    const stt = createSTT(settings, {
+      manager: (sttProvider === 'local' || sttProvider === 'auto') ? getSttManager() : undefined,
+      logger: getLogger(settings),
+    });
 
     appLog().debug({
       providers: stt.providers,
