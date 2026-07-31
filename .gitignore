@@ -11,3 +11,6 @@ cue-data.json
 !.claude/docs
 .codegraph/
 .mcp.json
+.*cache/
+*cache/
+__pycache__/

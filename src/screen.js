@@ -16,7 +16,7 @@
 const { desktopCapturer, screen } = require('electron');
 
 const MAX_EDGE = 1568;       // longest-edge cap, in pixels (vision providers downscale to this range)
-const JPEG_QUALITY = 0.85;   // 0–1; 0.85 is visually clean for screen text at KB, not MB
+const JPEG_QUALITY = 85;   // 0–100; 85 is visually clean for screen text at KB, not MB
 const CACHE_TTL_MS = 1500;   // reuse the last capture within this window for rapid ask bursts
 
 // Pure: resize dims preserving aspect ratio so the longest edge ≤ maxEdge. No upscale — an image

@@ -194,43 +194,112 @@ async function flushChannel(channel) {
   let watchdog = null;
   try {
     const settings = store.getSettings();
+
+    appLog().debug({
+      provider: settings.sttProvider,
+      model: settings.sttModel,
+      offlineModel: settings.offlineModel,
+      channel,
+      pcmBytes: pcm?.length,
+    }, 'Loading STT provider');
+
     const stt = createSTT(settings);
+
+    appLog().debug({
+      providers: stt.providers,
+      available: stt.available,
+      implementation: stt.constructor?.name,
+    }, 'STT provider created');
+
     if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper) or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
+      appLog().debug({
+        providers: stt.providers,
+        available: stt.available,
+      }, 'STT unavailable');
+
+      if (!sttDisabled) {
+        sttDisabled = true;
+        send('status', {
+          message: 'No transcription key set. Add an OpenAI (Whisper) or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.'
+        });
+      }
       return;
     }
-    // Wrap the cloud transcribe in an explicit per-call timeout (D4/D5) so a hung SDK call can
-    // NEVER pin the channel lock forever. Resolves to a timeout-shaped error the chain already
-    // handles (handleSttError surfaces it). Mirrors runFeature's 30s idle watchdog.
+
+    appLog().debug({
+      providers: stt.providers,
+    }, 'Starting transcription');
+
     let res;
+
+    const started = Date.now();
+
     try {
       res = await Promise.race([
         stt.transcribe(pcm),
         new Promise((_, reject) => {
-          watchdog = setTimeout(
-            () => reject({ timeout: true, message: 'Transcription timed out after ' + (STT_TRANSCRIBE_TIMEOUT_MS / 1000) + 's', provider: stt.providers.join('/') }),
-            STT_TRANSCRIBE_TIMEOUT_MS);
+          watchdog = setTimeout(() => reject({
+            timeout: true,
+            message: 'Transcription timed out after ' +
+              (STT_TRANSCRIBE_TIMEOUT_MS / 1000) + 's',
+            provider: stt.providers.join('/')
+          }), STT_TRANSCRIBE_TIMEOUT_MS);
         }),
       ]);
-    } finally { if (watchdog) clearTimeout(watchdog); }
+    } finally {
+      if (watchdog) clearTimeout(watchdog);
+    }
+
+    appLog().debug({
+      elapsedMs: Date.now() - started,
+      hasError: !!res?.error,
+      hasText: !!res?.text,
+      textLength: res?.text?.length ?? 0,
+    }, 'Transcription finished');
+
     if (res.error) {
+      appLog().debug({
+        error: res.error,
+      }, 'Transcription returned an error');
+
       handleSttError(res.error, settings);
       return;
     }
+
     if (res.text && res.text.trim()) {
-      const turn = { channel, text: res.text.trim(), ts: Date.now() };
+      const turn = {
+        channel,
+        text: res.text.trim(),
+        ts: Date.now()
+      };
+
       pushFinal(turn);
-      appLog().debug({ channel }, 'transcript', turn.text);
+
+      appLog().debug({
+        channel,
+        chars: turn.text.length,
+      }, 'Transcript accepted');
+
       send('transcript', turn);
     }
+
   } catch (e) {
-    // A timeout (no `status`: the race's reject) OR a thrown SDK error. Surface it as an
-    // actionable, provider-specific status instead of swallowing it into a console.log (D6) —
-    // a silent swallow was the "mysterious no transcription" symptom.
+    appLog().error({
+      name: e?.name,
+      message: e?.message,
+      stack: e?.stack,
+      error: e,
+    }, 'STT pipeline threw');
+
     handleSttError(e, store.getSettings());
+
   } finally {
     if (watchdog) clearTimeout(watchdog);
     state.transcribing[channel] = false;
+
+    appLog().debug({
+      channel,
+    }, 'STT request finished');
   }
 }
 
@@ -261,7 +330,7 @@ function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTim
 // live PCM handlers route to the batch buffer, and starts the loop if it isn't already draining.
 // The other channel keeps its streaming session; only the failed channel degrades.
 function degradeChannelToBatch(ch) {
-  if (streamSessions[ch]) { try { streamSessions[ch].close(); } catch {} streamSessions[ch] = null; }
+  if (streamSessions[ch]) { try { streamSessions[ch].close(); } catch { } streamSessions[ch] = null; }
   startFlushLoop();
 }
 
@@ -376,7 +445,7 @@ function openStreamSessions() {
 
 function closeStreamSessions() {
   for (const ch of ['you', 'them']) {
-    if (streamSessions[ch]) { try { streamSessions[ch].close(); } catch {} streamSessions[ch] = null; }
+    if (streamSessions[ch]) { try { streamSessions[ch].close(); } catch { } streamSessions[ch] = null; }
   }
   stopFlushLoop();
   buffers.you = []; buffers.them = [];
@@ -444,13 +513,18 @@ async function runFeature(mode, userText) {
     let imageDataUrl = null;
     if (def.needsScreen) {
       appLog().debug('feature needs screen; capturing screenshot');
-      try { 
-        imageDataUrl = await captureScreenshot(); 
+      try {
+        imageDataUrl = await captureScreenshot();
         appLog().debug({ bytes: imageDataUrl.length }, 'screenshot captured');
       }
-      catch (e) { 
-        appLog().warn({ error: e && e.message }, 'screenshot capture failed');
-        send('status', { message: 'Screen capture needs permission — grant Screen Recording to cue in System Settings.' }); 
+      catch (e) {
+        appLog().error({
+          name: e?.name,
+          message: e?.message,
+          stack: e?.stack,
+          error: e
+        }, "screenshot capture failed");
+        send('status', { message: 'Screen capture needs permission — grant Screen Recording to cue in System Settings.' });
       }
     }
 
@@ -501,7 +575,7 @@ async function regenerateResumeSummary() {
       system: resolveField('resumeSummaryPrompt', settings),
       turns: [{ role: 'user', text: resume }],
       imageDataUrl: null,
-      onToken: () => {}, // accumulate silently — no renderer tokens for a background digest
+      onToken: () => { }, // accumulate silently — no renderer tokens for a background digest
     });
     const clean = (digest || '').trim().slice(0, 1500);
     if (clean) store.setSettings({ resumeSummary: clean });
@@ -556,7 +630,7 @@ ipcMain.on('system:pcm', (_e, arrayBuffer) => {
   // else: STT off / one channel has no session / no batch loop → drop (no undrained buffer).
 });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
-ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
+ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => { }); });
 ipcMain.on('log', (_e, msg) => appLog().debug({ src: 'renderer' }, String(msg)));
 
 // -------- managed local STT IPC (Settings) --------
@@ -668,6 +742,16 @@ app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (sources.length) {
+        appLog().debug(
+          {
+            sources: sources.map(s => ({
+              id: s.id,
+              name: s.name,
+              display_id: s.display_id
+            }))
+          },
+          "Desktop sources"
+        );
         // Pick the source belonging to the primary display rather than always sources[0],
         // which on multi-monitor setups can hand back a secondary screen's loopback and
         // leave cue listening to the wrong display's audio. display_id is a string; on
@@ -675,6 +759,12 @@ app.whenReady().then(() => {
         const primaryId = String(screen.getPrimaryDisplay().id);
         const primary = sources.find((s) => String(s.display_id) === primaryId) || sources[0];
         callback({ video: primary, audio: 'loopback' });
+        appLog().debug({
+          id: primary?.id,
+          name: primary?.name,
+          display_id: primary?.display_id,
+          thumbnail: !!primary?.thumbnail
+        }, 'primary source');
       } else callback();
     }).catch(() => callback());
   }, { useSystemPicker: false });
@@ -704,7 +794,7 @@ app.whenReady().then(() => {
           system,
           turns: [{ role: 'user', text: userMessage }],
           imageDataUrl: null,
-          onToken: () => {},
+          onToken: () => { },
         });
       } catch (e) {
         throw e; // memory.js retries on throw (watermark not advanced); provider errors retry every 60 s

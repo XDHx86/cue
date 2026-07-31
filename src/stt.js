@@ -7,6 +7,11 @@
 // reachable, main.js sends live PCM to a streaming session instead of this loop, and
 // only uses createSTT() as a degrade-to-batch fallback.
 const { pcmToWav } = require('./wav');
+const { getLogger, child, stopLogger } = require('./logger');
+// Module-scoped structured logger for main's lifecycle (console → npm terminal + dated file,
+// ADR-014). Lazily resolved: getLogger() needs store settings, so first use defers until then.
+let appLog_ = null;
+function appLog() { return appLog_ || (appLog_ = child('main')); }
 
 async function transcribeOpenAI(apiKey, wav, model) {
   const OpenAI = require('openai');
@@ -22,10 +27,12 @@ async function transcribeGemini(apiKey, wav) {
   const ai = new GoogleGenAI({ apiKey });
   const res = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: [{ role: 'user', parts: [
-      { text: 'Transcribe this audio verbatim. Return only the spoken words with no commentary. If there is no clear speech, return an empty response.' },
-      { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }
-    ] }]
+    contents: [{
+      role: 'user', parts: [
+        { text: 'Transcribe this audio verbatim. Return only the spoken words with no commentary. If there is no clear speech, return an empty response.' },
+        { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }
+      ]
+    }]
   });
   return ((res && res.text) || '').trim();
 }
@@ -59,6 +66,9 @@ function createSTT(settings) {
   if (keys.openai) chain.push({ p: 'openai', fn: (wav) => transcribeOpenAI(keys.openai, wav, whisperModel) });
   if (keys.gemini) chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
 
+  appLog().warn({
+    stt: sttCfg
+  }, "STT config");
   return {
     available: chain.length > 0,
     providers: chain.map((c) => c.p),
