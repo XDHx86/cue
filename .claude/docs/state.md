@@ -16,18 +16,27 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 *next*; it is not a transcript.
 
 ## Branch
-- `feat/registry-refactor` (off `main`). An 8-phase registry-driven refactor at
-  [`C:\Users\karee\.claude\plans\curried-toasting-badger.md`](../../../Users/karee/.claude/plans/curried-toasting-badger.md)
-  (also tracked in [HANDOFF.md](HANDOFF.md)). **R1a + R1b + R1c complete** (uncommitted);
-  R2 next. Live progress + plan detail live in HANDOFF.md — this file is the short resume.
+- `main` — latest commit: `d04ad29 feat: add external WebSocket STT provider and local faster-whisper support`.
 
-## Completed (uncommitted, this branch)
-- **R1a — registry foundation.** [src/registry.js](../../src/registry.js) (`defineProvider`/
-  `listProviders`/`getProvider`/`renderSafe`/`resolveSupportedModels`, `${type}:${id}` namespacing),
-  [src/registry-loader.js](../../src/registry-loader.js) (folder discovery, param-injected),
-  [test/registry.test.js](../../test/registry.test.js) (11 tests).
-- **R1b — LLM providers into folders.** 5 self-describing descriptors under
-  `src/providers/llm/<id>/index.js` (openai, anthropic, gemini, nvidia, ollama), each calling
+## Completed (this session)
+- **AssemblyAI universal-streaming STT provider.** New provider at
+  `src/providers/stt/assemblyai/` (order 15, streaming only, v3 WebSocket protocol at
+  `wss://streaming.assemblyai.com/v3/ws`). Hand-rolled using WsClient from external-ws
+  with `Authorization` header for API key auth. 18 tests in `test/assemblyai-provider.test.js`.
+- **Audio resampling safety net.** `src/resample.js` (Int16 linear interpolation resampler,
+  dual-format: browser global + Node module) + `renderer/audio-capture.js` (shared
+  AudioCapture class replacing duplicated inline capture in renderer.js). Warns once per
+  AudioContext when sample rate mismatches. 11 tests in `test/resample.test.js`.
+- **WsClient headers extension.** Generic `headers` option added to WsClient in
+  `src/providers/stt/external-ws/session.js` (backward-compatible, used by AssemblyAI).
+- **resolveProvider generalization.** Generic exact-id match in `src/stt-stream.js`
+  prevents explicit provider names (like 'assemblyai') from accidentally matching a
+  different provider via capability-based fallback.
+
+## Completed (prior, committed)
+- R1a–R1c: registry foundation, LLM providers into folders, createLLM + store fold.
+- R2: STT providers into folders (faster-whisper, openai, gemini, external-ws).
+- P1–P3: transcription fixes, logging migration, categorized Settings tabs.
   `defineProvider`. Shared: [src/providers/llm/openai-compat.js](../../src/providers/llm/openai-compat.js)
   (one OpenAI-compatible streaming path for openai/nvidia/ollama; diverges only by `baseURL` +
   the ollama sentinel) and [src/providers/llm/shared.js](../../src/providers/llm/shared.js) (lazy

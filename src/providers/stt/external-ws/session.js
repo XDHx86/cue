@@ -107,9 +107,10 @@ function decodeFrame(buf) {
 // delivered via the on* callbacks; `onMessage` fires once per text/binary frame with
 // { op, payload } (payload is a Buffer). Close fires exactly once per connection lifecycle.
 class WsClient {
-  constructor({ url, onOpen, onMessage, onClose, onError }) {
+  constructor({ url, onOpen, onMessage, onClose, onError, headers }) {
     this.parsed = parseWsUrl(url);
     this.onOpen = onOpen; this.onMessage = onMessage; this.onClose = onClose; this.onError = onError;
+    this.headers = headers || {};
     this.sock = null; this.connected = false; this._key = null; this._rx = Buffer.alloc(0);
     this._closed = false;
   }
@@ -132,15 +133,18 @@ class WsClient {
     const defaultPort = secure ? 443 : 80;
     const hostHeader = port && port !== defaultPort ? host + ':' + port : host;
     this._key = makeHandshakeKey();
-    this.sock.write(
-      'GET ' + path + ' HTTP/1.1\r\n' +
+    let req = 'GET ' + path + ' HTTP/1.1\r\n' +
       'Host: ' + hostHeader + '\r\n' +
       'Upgrade: websocket\r\n' +
       'Connection: Upgrade\r\n' +
       'Sec-WebSocket-Key: ' + this._key + '\r\n' +
-      'Sec-WebSocket-Version: 13\r\n' +
-      '\r\n'
-    );
+      'Sec-WebSocket-Version: 13\r\n';
+    // Add custom headers (e.g., Authorization for AssemblyAI)
+    for (const [key, value] of Object.entries(this.headers)) {
+      req += key + ': ' + value + '\r\n';
+    }
+    req += '\r\n';
+    this.sock.write(req);
   }
 
   _onData(d) {

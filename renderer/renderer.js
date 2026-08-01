@@ -202,73 +202,47 @@
     $('#live-dot').style.display = collapsed ? 'none' : '';
   });
 
+  // ---- capture: mic + system audio (renderer side) -----------------------------
+  // Shared AudioCapture class (renderer/audio-capture.js) handles AudioContext,
+  // worklet setup, and resampling when the platform doesn't honour 16kHz.
+  const micCapture = new AudioCapture({
+    targetRate: 16000,
+    onPcm: (buf) => cue.micPcm(buf),
+    log: (msg) => cue.log(msg),
+  });
+  const sysCapture = new AudioCapture({
+    targetRate: 16000,
+    onPcm: (buf) => cue.systemPcm(buf),
+    log: (msg) => cue.log(msg),
+  });
+
+  // System audio factory — stops the video track from getDisplayMedia (we only want audio).
+  async function sysMediaFactory() {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    stream.getVideoTracks().forEach((t) => t.stop());
+    return stream;
+  }
+
   // Stop = start/stop listening. Kick off system-audio capture straight from the click so
   // the user-gesture is fresh for getDisplayMedia (loopback capture needs it).
   $('#stop-btn').addEventListener('click', () => {
     const turningOn = !$('#stop-btn').classList.contains('active');
-    if (turningOn) startSystemAudio();
+    if (turningOn) sysCapture.start(sysMediaFactory); // preserve gesture for getDisplayMedia
     cue.captureToggle();
   });
-
-  // ---- capture: mic (renderer side) --------------------------------------
-  let audioCtx = null, micStream = null, micNode = null, micProc = null;
-  async function startMic() {
-    if (micStream) return;
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
-      audioCtx = new AudioContext({ sampleRate: 16000 });
-      await audioCtx.audioWorklet.addModule('./pcm-processor.js');
-      micNode = audioCtx.createMediaStreamSource(micStream);
-      micProc = new AudioWorkletNode(audioCtx, 'pcm-processor');
-      micProc.port.onmessage = (e) => cue.micPcm(e.data);
-      const sink = audioCtx.createGain(); sink.gain.value = 0; // run processor silently
-      micNode.connect(micProc); micProc.connect(sink); sink.connect(audioCtx.destination);
-    } catch (err) {
-      cue.log('mic error: ' + (err && err.message));
-    }
-  }
-  function stopMic() {
-    if (micProc) { micProc.port.onmessage = null; micProc.disconnect(); micProc = null; }
-    if (micNode) { micNode.disconnect(); micNode = null; }
-    if (audioCtx) { audioCtx.close(); audioCtx = null; }
-    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
-  }
-
-  // ---- capture: system/meeting audio (getDisplayMedia loopback, in cue's process) ----
-  let sysStream = null, sysCtx = null, sysNode = null, sysProc = null;
-  async function startSystemAudio() {
-    if (sysStream) return;
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      stream.getVideoTracks().forEach((t) => t.stop()); // we only want the audio
-      const tracks = stream.getAudioTracks();
-      if (!tracks.length) { cue.log('system audio: no loopback track (macOS loopback unsupported here)'); stream.getTracks().forEach((t) => t.stop()); return; }
-      sysStream = stream;
-      sysCtx = new AudioContext({ sampleRate: 16000 });
-      await sysCtx.audioWorklet.addModule('./pcm-processor.js');
-      sysNode = sysCtx.createMediaStreamSource(new MediaStream(tracks));
-      sysProc = new AudioWorkletNode(sysCtx, 'pcm-processor');
-      sysProc.port.onmessage = (e) => cue.systemPcm(e.data);
-      const sink = sysCtx.createGain(); sink.gain.value = 0;
-      sysNode.connect(sysProc); sysProc.connect(sink); sink.connect(sysCtx.destination);
-      cue.log('system audio: capturing loopback');
-    } catch (err) {
-      cue.log('system audio error: ' + (err && err.message));
-    }
-  }
-  function stopSystemAudio() {
-    if (sysProc) { sysProc.port.onmessage = null; sysProc.disconnect(); sysProc = null; }
-    if (sysNode) { sysNode.disconnect(); sysNode = null; }
-    if (sysCtx) { sysCtx.close(); sysCtx = null; }
-    if (sysStream) { sysStream.getTracks().forEach((t) => t.stop()); sysStream = null; }
-  }
 
   // ---- events from main --------------------------------------------------
   cue.on('capture:state', ({ active }) => {
     capturing = active;
     $('#live-dot').classList.toggle('off', !active);
     $('#stop-btn').classList.toggle('active', active);
-    if (active) { startMic(); startSystemAudio(); } else { stopMic(); stopSystemAudio(); }
+    if (active) {
+      micCapture.start(() => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } }));
+      sysCapture.start(sysMediaFactory);
+    } else {
+      micCapture.stop();
+      sysCapture.stop();
+    }
     if (!active) {
       // Listening stopped: freeze the strip (turns stay for review) but drop live partials and
       // the status badge — they're stale once the stream closes.
@@ -502,6 +476,7 @@
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
+    $('#key-assemblyai').value = settings.apiKeys.assemblyai || '';
     $('#ollama-baseurl').value = (settings.ollama && settings.ollama.baseURL) || '';
     $('#resume-context').value = settings.resumeContext || '';
     // Assistant style: read the live promptOverrides.prePrompt home (the legacy top-level
@@ -569,6 +544,7 @@
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
+    settings.apiKeys.assemblyai = $('#key-assemblyai').value.trim();
     settings.ollama = { baseURL: $('#ollama-baseurl').value.trim() };
     settings.resumeContext = $('#resume-context').value.trim();
     // Pre-prompt: write the live promptOverrides.prePrompt home (the only override composeSystem

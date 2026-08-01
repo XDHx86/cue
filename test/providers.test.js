@@ -53,12 +53,12 @@ function loadReal() {
   loader.loadProviders({ _require: require });
 }
 
-test('loading the real src/providers tree registers the 5 LLM providers and 4 STT providers', () => {
+test('loading the real src/providers tree registers the 5 LLM providers and 5 STT providers', () => {
   loadReal();
   const ids = registry.listProviders('llm').map((d) => d.id);
   assert.deepEqual(ids, ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama'], 'LLM ids + order');
   const sttIds = registry.listProviders('stt').map((d) => d.id);
-  assert.deepEqual(sttIds, ['faster-whisper', 'openai', 'gemini', 'external-ws'], 'STT ids + order');
+  assert.deepEqual(sttIds, ['faster-whisper', 'assemblyai', 'openai', 'gemini', 'external-ws'], 'STT ids + order');
 });
 
 test('every LLM descriptor validates and has a render-safe, function-bearing createEngine', () => {

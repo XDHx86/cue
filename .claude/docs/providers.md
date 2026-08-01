@@ -56,12 +56,24 @@ from audio-capable keys, **openai → gemini**, and falls across providers on er
 `sttDisabled` latch in [main.js](../../main.js) stops retry spam once the chain returns
 403/401/`model_not_found`; `settings:set` resets it.
 
+| Provider | Streaming | Batch | Notes |
+|---|---|---|---|
+| faster-whisper (local) | yes | yes | Managed Python service (venv spawn + JSON-RPC). Order 10. |
+| assemblyai | yes | no | `wss://streaming.assemblyai.com/v3/ws`. Auth via `Authorization` header (raw API key). Audio: pcm_s16le binary frames (~50ms chunks). Reconnect with exponential backoff; latches after 3 failures. Order 15. |
+| openai | no | yes | Whisper API (`audio.transcriptions`). Order 20. |
+| gemini | no | yes | `generateContent` with inline audio. Order 30. |
+| external-ws | yes | no | User-run faster-whisper WS server. Order 40. |
+
 - **OpenAI Whisper** — one key does chat + transcription, **but** a project key restricted
   to chat-only models **403s on Whisper** (common user pitfall → README troubleshooting).
 - **Gemini** — one key does chat + transcription.
 - **Faster-whisper / Deepgram** — **decided** (ADR-006), implemented as a local streaming
   WS server with cue as client + POST batch fallback; see [implementation-plan.md](implementation-plan.md)
   Phase 3 and a planned `docs/faster-whisper-setup.md`.
+- **AssemblyAI** — real-time streaming via v3 WebSocket API. API key set in Settings → API Keys.
+  Protocol reference: `assemblyai` npm package v4.36.4 (NOT used as dependency — hand-rolled
+  using WsClient from external-ws). Provider descriptor auto-registers; Settings UI auto-builds
+  from `configurableSettings`.
 
 ## Error normalization (ADR-011)
 

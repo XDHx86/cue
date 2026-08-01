@@ -97,6 +97,7 @@ cue uses **your own** API key, so it's free to run (you only pay your AI provide
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | One key does everything — **but** for the *listening* features the key must have **Whisper / audio** access (a "restricted" project key that only allows chat will give a 403 on transcription). |
 | **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | Great for screen & coding help. Claude has no speech-to-text, so add an OpenAI or Gemini key too if you want the listening features. |
 | **Google Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | One key does chat + transcription. |
+| **AssemblyAI** | [assemblyai.com/dashboard](https://www.assemblyai.com/dashboard/account) | Real-time streaming transcription via v3 WebSocket API. Set Transport to "AssemblyAI (cloud streaming)" in Settings → Transcription. |
 
 Your key is stored **only on your computer** (in `cue-data.json`) and is sent **only** to that provider. cue has no server and collects nothing.
 
@@ -187,7 +188,7 @@ cue is an [Electron](https://www.electronjs.org/) app. Everything runs locally e
 - **Your mic ("You")** — `getUserMedia` → downsampled to 16 kHz audio → transcribed.
 - **Meeting audio ("Them")** — `getDisplayMedia` loopback capture of your system's output audio, kept on its own channel so cue knows *who* said what.
 
-Both audio streams are transcribed — by a **managed local faster-whisper** service by default (`auto`), falling back to cloud Whisper/Gemini, or by an external server you run — and fed, with an optional screenshot, to your AI model. Responses **stream** into the panel word-by-word.
+Both audio streams are transcribed — by a **managed local faster-whisper** service by default (`auto`), falling back to **AssemblyAI** (cloud streaming), cloud Whisper/Gemini, or by an external server you run — and fed, with an optional screenshot, to your AI model. Responses **stream** into the panel word-by-word.
 
 **The invisibility** is a single macOS window flag: `setContentProtection(true)`, which sets `NSWindowSharingNone`. This asks the window server to exclude cue from screen-capture streams. It's the same mechanism DRM apps and Zoom's own toolbar use. It is **not** a GPU trick or a special overlay layer — and on macOS 15.4+ Apple lets some capture tools ignore it, which is why it's best-effort (see the disclaimer at the top).
 
@@ -251,6 +252,7 @@ Issues and PRs welcome. cue is intentionally small and readable — `main.js` (a
 
 ### Features Open for Contribution
 - [x] Local zero-latency streaming transcription (faster-whisper, managed) — built; see [docs/faster-whisper-setup.md](docs/faster-whisper-setup.md)
+- [x] AssemblyAI real-time streaming transcription (v3 WebSocket API) — built
 - [ ] Add a second local STT engine (e.g. whisper.cpp) via the `src/stt-engine.js` registry
 - [ ] Add optional Deepgram support for ultra-fast transcription
 
