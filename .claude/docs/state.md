@@ -36,40 +36,27 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 - **resolveProvider generalization.** Generic exact-id match in `src/stt-stream.js`
   prevents explicit provider names (like 'assemblyai') from accidentally matching a
   different provider via capability-based fallback.
+- **Graceful shutdown.** Enhanced `will-quit` handler in `main.js` that stops memory
+  runner, persists rolling summary, closes streaming sessions, stops flush loop before
+  STT manager stop and logger flush.
+- **Settings validation.** `validatePatch()` in `store.js` validates API key formats,
+  STT provider ids, LLM provider ids, and schema constraints on every `setSettings()` call.
+  9 tests in `test/store-defaults.test.js`.
+- **Logging settings in Advanced UI.** 5 new schema entries in `config-schema.js`
+  (level, logDir, console, file, pretty) under "Logging" section in Advanced tab.
 
 ## Completed (prior, committed)
 - R1a–R1c: registry foundation, LLM providers into folders, createLLM + store fold.
 - R2: STT providers into folders (faster-whisper, openai, gemini, external-ws).
 - P1–P3: transcription fixes, logging migration, categorized Settings tabs.
-  `defineProvider`. Shared: [src/providers/llm/openai-compat.js](../../src/providers/llm/openai-compat.js)
-  (one OpenAI-compatible streaming path for openai/nvidia/ollama; diverges only by `baseURL` +
-  the ollama sentinel) and [src/providers/llm/shared.js](../../src/providers/llm/shared.js) (lazy
-  `child('llm')` logger guard + `stripDataUrl`, kept BELOW llm.js in the require graph to avoid a
-  cycle). Anthropic/gemini ports are verbatim from the old `streamX` functions.
-  [test/providers.test.js](../../test/providers.test.js) asserts the 5 register + that folding
-  their `defaultSettings` reproduces today's literal DEFAULTS exactly.
-- **R1c — createLLM + store fold.** [src/llm.js](../../src/llm.js) is now a thin
-  `getProvider('llm', settings.provider).createEngine({settings})` delegate (the `if/else` switch
-  + `streamX` functions deleted). [src/store.js](../../src/store.js) folds every registered LLM
-  provider's `defaultSettings` into DEFAULTS at load (`foldLlmDefaults` + `BASE_DEFAULTS`) — the
-  provider descriptors are now the single source for `apiKeys`/`models`/`ollama` defaults.
-  `main.js` calls `loadProviders()` at startup (idempotent; store already triggers it at require).
-  **238/238 tests pass.**
 
 ## In flight
-- Nothing mid-edit; R2 is complete and verified (258/258 tests pass, no import cycles).
+- Nothing mid-edit.
 
 ## Next
 1. **R3 — auto-generated provider Settings UI.** providers:spec IPC -> renderer builds provider
    buttons + key/baseURL/model fields + provider-specific options from configurableSettings.
-   See HANDOFF R3.
-2. Then R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging), R8 (docs compression).
-
-## Blockers / open questions
-- Manual UI reachability check for R3/R5/R6/R7 needs the user's machine (headless Electron can't
-  open the panel). Not blocking R2 (uncoupled).
-- `apiKeys.deepgram` is an STT key seeded as a literal in `store.js BASE_DEFAULTS` until R2 wires a
-  deepgram STT provider to contribute it (matches ADR-002 — STT defaults live in store today).
+2. Then R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging config), R8 (docs compression).
 
 ## Session discoveries
 - Real provider modules + `_resetProviders()`-between-cases are incompatible: Node caches a

@@ -58,6 +58,14 @@ rule — it lives there now.
   them (the System Settings checkbox can linger, misleading users). Tell users to toggle off/on
   after a rebuild.
 
+## Shutdown
+- `will-quit` in Electron is synchronous — it cannot `await` async teardown. Flush state with
+  synchronous best-effort calls (memory persist, session close, manager stop, logger flush).
+  A failure must never block quit — wrap each step in try/catch.
+- Streaming STT sessions (local `stream_stop`, AssemblyAI `Terminate`) are only closed
+  explicitly on capture stop or quit — the Python process exiting implicitly tears them down
+  otherwise. When adding a session close path, don't assume `setCapturing(false)` always runs.
+
 ## Tests
 - Tests must not `require('electron')` — electron-dependent bits are param-injected (see
   `src/profile-context.js` and the existing `test/` files). Adding an electron import in a

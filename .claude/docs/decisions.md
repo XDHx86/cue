@@ -177,3 +177,24 @@ STT-only plugin model (leaves the LLM switch in place); a JSON manifest without 
 the descriptor (the engine belongs with the metadata it describes).
 **Status:** implemented for LLM (R1a spine, R1b 5 providers, R1c `createLLM`+store delegation).
 STT migration (R2) uses the same shape — `createStreamSession` is already in the validator.
+
+## ADR-018 — Settings validation is advisory, non-blocking — implemented
+**Decision:** `store.setSettings(patch)` runs `validatePatch()` before merging: schema `validate()`
+(type coercion, numeric clamping — corrective) plus semantic checks (API-key prefixes, STT/LLM
+provider ids — advisory). Advisory errors are logged, never block the save.
+**Rationale:** a bad API key or unknown provider id should warn without breaking saving (a blocked
+save traps the user in a broken state with no escape). Schema clamping stays corrective so
+out-of-range values can't poison the app.
+**Alternatives rejected:** hard-fail validation (blocks saving); no validation (silent bad state).
+
+## ADR-019 — Shutdown flushes all pending state synchronously — implemented
+**Decision:** the `will-quit` handler flushes every pending state: stop the memory runner + persist
+the rolling summary, close streaming STT sessions (sends `stream_stop`/Terminate), stop the batch
+flush loop, tear down the STT manager, then flush the Pino transport. All best-effort synchronous.
+**Rationale:** quitting mid-capture previously lost the rolling memory summary (only persisted on
+`setCapturing(false)`) and leaked the Python process. Synchronous best-effort keeps the handler
+simple — Electron gives no way to await async work in `will-quit`, and a failure must never hang
+quit.
+**Alternatives rejected:** `before-quit` with `e.preventDefault()` + async drain (adds a quit-delay
+failure mode for marginal benefit); leaving teardown to the renderer's stop button (missed on quit
+shortcuts / window close).

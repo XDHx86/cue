@@ -16,17 +16,18 @@ npm start          # electron .
 ```
 
 Verbose capture/LLM traces: set `const DEBUG = true` at the top of
-[`main.js`](../main.js) (or `CUE_ENV_DEBUG=1` for the `.env` loader). LLM provider traces also flow
-through the `child('llm')` Pino logger at debug level. **Don't commit DEBUG on.**
+[`main.js`](../main.js). LLM provider traces also flow through the `child('llm')` Pino logger at
+debug level. **Don't commit DEBUG on.**
 
 ## Project layout
 
 | Path | Role |
 |---|---|
-| [`main.js`](../main.js) | main process: window, shortcuts, capture flush loop, `runFeature` orchestration |
+| [`main.js`](../main.js) | main process: window, shortcuts, capture flush loop, `runFeature` orchestration, graceful shutdown |
 | [`preload.js`](../preload.js) | tight `contextBridge` IPC allowlist (`contextIsolation:true`) |
-| [`src/`](../src/) | providers (`llm.js`, `stt.js`), `prompts.js`, `screen.js`, `transcript.js`, `store.js`, `env.js`, `errors.js`, `wav.js`, `profile-context.js` |
-| [`renderer/`](../renderer/) | the glass UI (`renderer.js`, `index.html`, `styles.css`), `pcm-processor.js` (audio worklet), `icons.js` |
+| [`src/`](../src/) | registry (`registry.js`, `registry-loader.js`), STT/LLM delegates (`llm.js`, `stt.js`, `stt-stream.js`), `prompts.js`, `screen.js`, `transcript.js`, `store.js`, `config-schema.js`, `errors.js`, `wav.js`, `resample.js`, `memory.js`, `profile-context.js` |
+| [`src/providers/`](../src/providers/) | self-describing LLM (`llm/<id>/`) and STT (`stt/<id>/`) provider folders, auto-registered via `defineProvider` |
+| [`renderer/`](../renderer/) | the glass UI (`renderer.js`, `index.html`, `styles.css`), `pcm-processor.js` (audio worklet), `audio-capture.js` (shared capture class), `icons.js` |
 | [`test/`](../test/) | `node --test` suite (pure-Node) |
 
 **No build step for source** — plain HTML/CSS/JS; no TypeScript, no linter, no bundler.

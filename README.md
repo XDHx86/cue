@@ -189,7 +189,7 @@ cue is an [Electron](https://www.electronjs.org/) app. Everything runs locally e
 - **Your mic ("You")** — `getUserMedia` → downsampled to 16 kHz audio → transcribed.
 - **Meeting audio ("Them")** — `getDisplayMedia` loopback capture of your system's output audio, kept on its own channel so cue knows *who* said what.
 
-Both audio streams are transcribed — by a **managed local faster-whisper** service by default (`auto`), falling back to **AssemblyAI** (cloud streaming), cloud Whisper/Gemini, or by an external server you run — and fed, with an optional screenshot, to your AI model. Responses **stream** into the panel word-by-word.
+Both audio streams are transcribed — by a **managed local faster-whisper** service by default (`auto`), falling back to **AssemblyAI** (cloud streaming), cloud Whisper/Groq/Gemini, or by an external server you run — and fed, with an optional screenshot, to your AI model. Responses **stream** into the panel word-by-word.
 
 **The invisibility** is a single macOS window flag: `setContentProtection(true)`, which sets `NSWindowSharingNone`. This asks the window server to exclude cue from screen-capture streams. It's the same mechanism DRM apps and Zoom's own toolbar use. It is **not** a GPU trick or a special overlay layer — and on macOS 15.4+ Apple lets some capture tools ignore it, which is why it's best-effort (see the disclaimer at the top).
 

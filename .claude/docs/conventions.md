@@ -78,6 +78,17 @@ and require no Electron. Run one test: `node --test test/<file>.test.js`; filter
 boundary get a drift guard — `test/stt-models.test.js` asserts `STT_MODEL_SIZES` equals
 `python/cue_stt_service.py:MODELS`.
 
+## Settings validation — schema + advisory patch checks
+
+- Every configurable value is declared in [src/config-schema.js](../../src/config-schema.js)
+  (`SCHEMA` entries with `type`/`min`/`max`/`default`/`tab`/`section`). New schema entries appear
+  in the Advanced-tab Settings UI **automatically** via `settingsSchema()` IPC → `buildSchemaFields()`.
+- `store.setSettings(patch)` runs `validatePatch()`: schema `validate()` (coercive/clamping) plus
+  advisory semantic checks (API key prefixes, provider ids). Advisory errors are logged, never
+  blocking. Keep validation non-fatal — a bad key must not break saving.
+- STT/LLM provider ids are validated against the known set; when adding a provider, extend the
+  list in `validatePatch` and update `test/providers.test.js` (the STT-count assertion).
+
 ## Local STT — engine-agnostic seam
 
 - `src/stt-engine.js` is the single seam: `registerEngine(id, factory)`. A new local engine

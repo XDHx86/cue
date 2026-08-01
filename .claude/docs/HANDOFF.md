@@ -33,16 +33,17 @@ src/
   prompt-compose.js      # composeSystem
   prompts.js             # MODES, formatTranscript, summary prompts
   logger.js              # Pino singleton (no per-module levels / live reconfigure / UI yet)
-  errors.js, screen.js, env.js, wav.js, profile-context.js, skills.js, memory.js, transcript.js
-renderer/ index.html renderer.js styles.css pcm-processor.js icons.js
+  errors.js, screen.js, wav.js, resample.js, profile-context.js, skills.js, memory.js, transcript.js, config-schema.js
+providers/ llm/<id>/index.js stt/<id>/index.js   # registry-driven LLM + STT providers
+renderer/ index.html renderer.js styles.css pcm-processor.js audio-capture.js icons.js
 python/ cue_stt_service.py cue_stt_logging.py   # managed STT service
-test/  (21 files, pure-Node, param-injected)
+test/  (pure-Node, param-injected; no electron import)
 2. Current Progress
 Task	Status	Notes
 R1a — registry foundation	Completed	src/registry.js, src/registry-loader.js, test/registry.test.js (11 tests pass)
 R1b — migrate LLM providers to folders	Completed	5 providers under src/providers/llm/<id>/index.js + openai-compat.js + shared.js; test/providers.test.js (7 tests pass)
 R1c — rewrite createLLM + store defaults	Completed	src/llm.js is a thin registry delegate; store.js folds provider defaultSettings into DEFAULTS; loadProviders() at startup. 238/238 tests pass.
-R2 — STT provider registry	Not Started	next
+R2 — STT provider registry	Completed	faster-whisper, assemblyai, openai, groq, gemini, external-ws under src/providers/stt/<id>/; batch chain + streaming resolver read the registry
 R3 — auto-generated provider Settings UI	Not Started	
 R4 — configurable shortcuts + actions	Not Started	
 R5 — prompt editing UI	Not Started	

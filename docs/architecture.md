@@ -73,10 +73,11 @@ streaming partial, and `lastSummarizedTs` is the rolling-summary watermark. The 
   needs no real key — a non-empty sentinel is used). Each provider's `streamX` attaches the
   optional screenshot to the last user turn differently; `maxTokens` is pinned to 4096
   ("effectively unlimited") because the Anthropic SDK requires a value.
-- **Speech-to-text** — three paths behind one engine-agnostic seam:
+- **Speech-to-text** — registry-driven providers behind one engine-agnostic seam:
   - **Batch (cloud)** — [`src/stt.js`](../src/stt.js) `createSTT(settings)`, a separate factory
-    (Anthropic has no audio API); a fallback chain over audio-capable keys (OpenAI Whisper →
-    Gemini) with a `sttDisabled` latch on 403/401/`model_not_found`.
+    (Anthropic has no audio API); a fallback chain over audio-capable providers (local
+    faster-whisper → OpenAI Whisper → Groq → Gemini) with a `sttDisabled` latch on
+    403/401/`model_not_found`.
   - **Managed local engine** — [`src/stt-process.js`](../src/stt-process.js) spawns + manages a
     Python service ([`python/cue_stt_service.py`](../python/cue_stt_service.py)) over
     line-delimited JSON-RPC: it creates the venv, pins deps, restarts on crash (latches after 3),
@@ -84,11 +85,15 @@ streaming partial, and `lastSummarizedTs` is the rolling-summary watermark. The 
     `main.js`/`stt-stream.js` never name one — adding whisper.cpp is one `registerEngine` call.
     [`src/stt-models.js`](../src/stt-models.js) is the paired Node-side model list (synced with
     the Python `MODELS`).
-  - **External server** — [`src/stt-stream.js`](../src/stt-stream.js) is a hand-rolled WebSocket
-    client to a server you run; same `{ start, sendAudio, close }` surface as the managed engine.
+  - **Cloud streaming** — **AssemblyAI** streams live PCM over a hand-rolled v3 WebSocket
+    (binary Int16 frames, `Authorization` header auth), reusing the `WsClient` transport from
+    external-ws ([`src/providers/stt/assemblyai/`](../src/providers/stt/assemblyai/)).
+  - **External server** — a hand-rolled WebSocket client to a faster-whisper server you run;
+    same `{ start, sendAudio, close }` surface as the managed engine.
 - **Routing** — [`src/stt-stream.js`](../src/stt-stream.js) `resolveProvider` picks `auto` → local
-  (when its venv is ready) → external WS URL → null/batch, or `local`/`faster-whisper`/`batch`
-  forced. CLIs: `npm run stt:setup|status|models|download|delete`. See
+  (when its venv is ready) → AssemblyAI (if a key is set) → external WS URL → null/batch, or
+  `local`/`assemblyai`/`faster-whisper`/`batch` forced (explicit names match by provider id).
+  CLIs: `npm run stt:setup|status|models|download|delete`. See
   [faster-whisper-setup.md](faster-whisper-setup.md).
 
 ## Feature modes & prompt composition

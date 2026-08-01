@@ -20,20 +20,22 @@ It is a compressed view — if it disagrees with a permanent file, that file win
 build step) that captures **screen + mic + meeting audio**, transcribes them as two
 end-to-end channels (`you` / `them`), and streams answers from a bring-your-own-key LLM
 (OpenAI / Anthropic / Gemini / Nvidia / **Ollama**). Everything runs locally except the
-provider call. Speech-to-text defaults to a **managed local faster-whisper** Python service
-(ADR-013) spawned by main; external WebSocket server or cloud Whisper/Gemini are fallbacks.
-The central invariant: **the three inputs stay separate and the channel tag preserves "who
-said what"** through transcript → prompt → render.
+provider call. Speech-to-text is **registry-driven**: STT providers live in folders under
+`src/providers/stt/<id>/index.js` and auto-register via `defineProvider`. Default transport
+is a **managed local faster-whisper** Python service (ADR-013) spawned by main; fallbacks
+are **AssemblyAI** (cloud streaming), external WebSocket server, and cloud batch
+(OpenAI Whisper / **Groq** / Gemini). The central invariant: **the three inputs stay
+separate and the channel tag preserves "who said what"** through transcript → prompt → render.
 
 ## Right now
-- Branch `fix/stt-transcription-timeout`, an 8-priority overhaul at
-  [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md). **P1 (fix transcription) and P2
-  (logging migration) are committed.** **P3 (categorized Settings tabs) is in flight** —
-  the panel is rebuilt as **Providers · Transcription · Models · Context · Shortcuts** (every
-  field preserved; entry points stable), plus a fix so the Assistant-style seg reads/writes
-  the live `promptOverrides.prePrompt` home instead of the deleted legacy keys. **217/217 tests pass.**
-- **Next after P3 commits:** P4 (mute/unmute reflecting real capture/STT state) → P5 (screen perms) →
-  P6 (notifications) → P7 (CI/build/Docker) → P8 (retire .env + ADR-015).
+- Branch `main` with uncommitted session work. Recent: Groq STT provider, AssemblyAI
+  streaming provider, audio resampling safety net, graceful shutdown, settings validation,
+  Advanced-tab logging config. See [state.md](state.md) for the full list and `git status`.
+- **98/98 tests pass** across the touched suites (`test/providers.test.js`,
+  `test/assemblyai-provider.test.js`, `test/resample.test.js`, `test/store-defaults.test.js`,
+  `test/registry.test.js`, `test/stt-stream.test.js`).
+- **Next:** R3 — auto-generated provider Settings UI (renderer builds provider fields from
+  `configurableSettings`), then R4–R8.
 
 ## Where things live
 - Architecture & seams → [architecture.md](architecture.md) · Coding rules → [conventions.md](conventions.md)
@@ -42,7 +44,7 @@ said what"** through transcript → prompt → render.
 
 ## Where the work is
 - Current snapshot → [state.md](state.md) — and `git status` / `git diff` for the live tree.
-- The roadmap → [implementation-plan.md](implementation-plan.md) · The 8-priority plan → [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md)
+- The roadmap → [implementation-plan.md](implementation-plan.md)
 - Assistant-style shaping helper → [src/preprompt.js](../../src/preprompt.js) (electron-free; the
   renderer reaches it via a synchronous preload contextBridge pass-through, not IPC).
 

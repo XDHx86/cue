@@ -64,7 +64,8 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
 ## STT — managed local engine, engine-agnostic seam (ADR-002, ADR-013)
 
 - **Batch** — [src/stt.js](../../src/stt.js): `createSTT(settings, { manager, logger })` builds a
-  fallback chain ordered **local-first, then cloud** (faster-whisper → openai → gemini). The local
+  fallback chain ordered **local-first, then cloud** (faster-whisper → openai → groq → gemini,
+  filtered by `capabilities.batch`). The local
   entry reuses the SAME managed Python process + JSON-RPC client as the streaming engine below,
   calling the service's `transcribe` method directly over stdin/stdout — no HTTP server, no
   `fasterWhisperURL` (that field now only selects the *external* user-run WS server in the streaming
@@ -77,9 +78,12 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
   stops retry spam once the chain returns 403/401/`model_not_found`.
 - **Streaming** — [src/stt-stream.js](../../src/stt-stream.js): `createStreamSTT(settings,
   { localEngineManager })` is the routing layer. It resolves the transport from `settings.stt.provider`
-  (`auto` → local if the manager reports ready, else external WS URL if set, else null/batch; `local`
-  forces local; `faster-whisper` is the external WS; `batch` is unavailable here). The resolver is
-  pure (readiness is a passed-in hint) so it tests without a process.
+  (`auto` → local if the manager reports ready, else assemblyai if a key is set, else external WS URL
+  if set, else null/batch; `local` forces local; `assemblyai` forces the cloud streaming provider;
+  `faster-whisper` is the external WS; `batch` is unavailable here). The resolver matches streaming
+  providers from the registry (`capabilities.streaming` + `streamingReady`), with legacy aliases
+  (`local`/`faster-whisper`) mapped by capability and any other explicit name matched by **exact id**.
+  The resolver is pure (readiness is a passed-in hint) so it tests without a process.
 - **Engine seam** — [src/stt-engine.js](../../src/stt-engine.js): `registerEngine/listEngines/
   createEngineSession/engineMeta`. The faster-whisper engine self-registers; its
   `LocalFasterWhisperSession` bridges `{ start, sendAudio, close }` onto the manager's JSON-RPC.
@@ -110,7 +114,10 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
   isn't safe before whenReady) and surfaces `status`/`progress` to the renderer. STT IPC:
   `stt:diagnostics` (cache scan + manager.diagnostics()), `stt:prepare` (venv bootstrap), and
   `stt:model:download`/`stt:engine:list`; the model-download/delete handlers pass `download_root`
-  so they honor the cache dir before any `load`. `will-quit` tears the manager down.
+  so they honor the cache dir before any `load`. **Graceful shutdown (`will-quit` in main.js):**
+  stops the memory runner + persists the rolling summary, closes streaming sessions (sends
+  `stream_stop`/Terminate), stops the batch flush loop, tears the STT manager down, then flushes
+  the Pino transport. All best-effort synchronous — a failure never blocks quit.
   **No silent timeouts (ADR-016):** the batch/cloud `flushChannel` wraps `transcribe` in a 30s
   watchdog that releases `state.transcribing[ch]` + surfaces an actionable error (mirrors
   `runFeature`'s LLM idle watchdog); a streaming session that fails/latches mid-capture degrades
@@ -148,9 +155,11 @@ Until that lands, any new system-prompt section must still go through `main.js:1
 [src/store.js](../../src/store.js) persists `userData/cue-data.json`, deep-merged over
 `DEFAULTS`. Each provider has `{ fast, smart }` tiers; the **Smart toggle** picks the tier.
 The store **auto-switches the active provider** if the current one has no key but another
-does. [src/env.js](../../src/env.js) `loadDotenv()` runs **before** store is required,
-resolving `CUE_ENV_PATH → userData/.env → cwd/.env`; `store.load()` then applies `CUE_*`
-runtime overrides that are **never persisted** to `cue-data.json`.
+does. `setSettings()` runs `validatePatch()` (advisory — logs key-format/provider-id warnings
+without blocking the save) and schema `validate()` (corrective — coerces types, clamps numerics)
+on every patch. STT/LLM settings are schema-driven: [src/config-schema.js](../../src/config-schema.js)
+holds every configurable runtime value; the renderer auto-builds Advanced-tab fields from
+`settingsSchema()` IPC, so a new schema entry appears in Settings without a UI edit.
 
 ## Edit blast-radius (do not break without checking the whole loop)
 
