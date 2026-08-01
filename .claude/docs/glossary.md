@@ -63,9 +63,7 @@ One line per term. Phrases marked **(plan)** are defined by the roadmap but not 
 - **IPC allowlist** — `preload.js` `contextBridge` exposes only listed channels; a new channel
   needs allowlist + handler + renderer consumer.
 - **fast / smart tiers** — per-provider model pair in `DEFAULTS`; Smart toggle selects the tier.
-- **DEBUG** — top-of-file `const DEBUG=false` toggle in `main.js` / `src/llm.js`; plus
-  `CUE_ENV_DEBUG` for the env-loader traces.
-- **`CUE_*` env overrides** — runtime-only setting/secret overrides from `.env`, never
-  persisted to `cue-data.json`.
-- **.env resolution order** — `CUE_ENV_PATH` → `userData/.env` → `cwd/.env`, first existing
-  wins; shell-set vars always win over file values.
+- **DEBUG** — top-of-file `const DEBUG=false` toggle in `main.js` / `src/llm.js`.
+- **Config schema** — `src/config-schema.js` SCHEMA array: the single source of truth for all
+  configurable runtime values (types, bounds, defaults, UI placement). Settings are persisted
+  via `cue-data.json` and validated on load.

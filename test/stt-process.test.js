@@ -230,13 +230,14 @@ test('manager.start() succeeds when the spawned service answers hello with the m
 // key is omitted (Python applies its own default) rather than forced to a string.
 
 test('buildPyLogEnv returns {} when no logging config is given', () => {
-  assert.deepEqual(buildPyLogEnv(null, () => '/ud'), {});
-  assert.deepEqual(buildPyLogEnv(undefined, () => '/ud'), {});
+  assert.deepEqual(buildPyLogEnv(null, null, () => '/ud'), {});
+  assert.deepEqual(buildPyLogEnv(undefined, null, () => '/ud'), {});
 });
 
 test('buildPyLogEnv maps every set field to a CUE_STT_LOG_* env string and resolves logDir absolutely', () => {
   const env = buildPyLogEnv(
     { level: 'debug', console: false, file: true, pretty: false, rotate: { sizeBytes: 5242880, count: 5 } },
+    null,
     () => '/ud',
   );
   assert.equal(env.CUE_STT_LOG_LEVEL, 'debug');
@@ -250,7 +251,7 @@ test('buildPyLogEnv maps every set field to a CUE_STT_LOG_* env string and resol
 });
 
 test('buildPyLogEnv omits unset keys (Python applies its own default) but always resolves logDir', () => {
-  const env = buildPyLogEnv({ level: 'warn' }, () => '/ud');
+  const env = buildPyLogEnv({ level: 'warn' }, null, () => '/ud');
   assert.equal(env.CUE_STT_LOG_LEVEL, 'warn');
   assert.equal(Object.prototype.hasOwnProperty.call(env, 'CUE_STT_LOG_CONSOLE'), false,
     'unset keys are omitted, not forced to a string');
@@ -259,9 +260,9 @@ test('buildPyLogEnv omits unset keys (Python applies its own default) but always
 });
 
 test('buildPyLogEnv honors an absolute logDir as-is; a relative one resolves under userData', () => {
-  const abs = buildPyLogEnv({ logDir: '/var/log/cue' }, () => '/ud');
+  const abs = buildPyLogEnv({ logDir: '/var/log/cue' }, null, () => '/ud');
   assert.equal(abs.CUE_STT_LOG_DIR.replace(/\\/g, '/'), '/var/log/cue');
-  const rel = buildPyLogEnv({ logDir: 'sessions/logs' }, () => '/ud');
+  const rel = buildPyLogEnv({ logDir: 'sessions/logs' }, null, () => '/ud');
   assert.equal(rel.CUE_STT_LOG_DIR.replace(/\\/g, '/'), '/ud/sessions/logs');
 });
 

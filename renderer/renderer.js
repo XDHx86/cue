@@ -161,10 +161,11 @@
   const placeholder = $('#placeholder');
   const composer = $('#composer');
 
+  function inputMaxHeight() { return (settings && settings.ui && typeof settings.ui.inputMaxHeight === 'number') ? settings.ui.inputMaxHeight : 140; }
   function syncPlaceholder() {
     placeholder.classList.toggle('hidden', input.value.length > 0 || document.activeElement === input);
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+    input.style.height = Math.min(input.scrollHeight, inputMaxHeight()) + 'px';
   }
   input.addEventListener('input', syncPlaceholder);
   input.addEventListener('focus', () => { composer.classList.add('focused'); placeholder.classList.add('hidden'); });
@@ -347,7 +348,8 @@
     el.textContent = message;
     el.classList.add('show');
     clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => el.classList.remove('show'), 11000);
+    const dur = (settings && settings.ui && typeof settings.ui.statusDurationMs === 'number') ? settings.ui.statusDurationMs : 11000;
+    statusTimer = setTimeout(() => el.classList.remove('show'), dur);
   }
   cue.on('status', ({ message }) => { cue.log('[status] ' + message); showStatus(message); });
 
@@ -521,6 +523,7 @@
     syncAssistShortcutLabels();
     $('#s-status').textContent = statusText();
     fillSttSettings();
+    fillSchemaFields();
   }
   $('#clear-resume').addEventListener('click', async () => {
     $('#resume-context').value = '';
@@ -603,6 +606,7 @@
         vad: sttVad,
       },
     };
+    saveSchemaFields();
     await cue.settingsSet(settings);
   }
 
@@ -724,12 +728,15 @@
 
   // UI Zoom buttons (text only)
   let currentZoom = 1;
+  function uiZoomMin() { return (settings && settings.ui && typeof settings.ui.zoomMin === 'number') ? settings.ui.zoomMin : 0.5; }
+  function uiZoomMax() { return (settings && settings.ui && typeof settings.ui.zoomMax === 'number') ? settings.ui.zoomMax : 3; }
+  function uiZoomStep() { return (settings && settings.ui && typeof settings.ui.zoomStep === 'number') ? settings.ui.zoomStep : 0.1; }
   function updateZoom(delta) {
-    currentZoom = Math.max(0.5, Math.min(3, currentZoom + delta));
+    currentZoom = Math.max(uiZoomMin(), Math.min(uiZoomMax(), currentZoom + delta));
     document.documentElement.style.setProperty('--text-zoom', currentZoom);
   }
-  $('#zoom-in-btn').addEventListener('click', () => updateZoom(0.1));
-  $('#zoom-out-btn').addEventListener('click', () => updateZoom(-0.1));
+  $('#zoom-in-btn').addEventListener('click', () => updateZoom(uiZoomStep()));
+  $('#zoom-out-btn').addEventListener('click', () => updateZoom(-uiZoomStep()));
 
   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
@@ -809,12 +816,135 @@
   $('#ob-skip').addEventListener('click', finishOnboard);
   $('#logo-btn').addEventListener('click', showOnboard);
 
+  // ---- schema-driven settings fields ---------------------------------------
+  // Settings are generated from the config schema (src/config-schema.js). Each ui-tier
+  // entry is placed on its designated tab. Entries with kind:'textarea' render as
+  // textareas; numeric entries render as number inputs. Adding a new setting = adding
+  // one schema entry; zero HTML changes, zero renderer changes.
+  let _schema = null;  // cached schema entries from the main process
+
+  function resolvePath(obj, dottedPath) {
+    const keys = dottedPath.split('.');
+    let node = obj;
+    for (const k of keys) {
+      if (node == null || typeof node !== 'object') return undefined;
+      node = node[k];
+    }
+    return node;
+  }
+
+  function setPath(obj, dottedPath, value) {
+    const keys = dottedPath.split('.');
+    let node = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (node[keys[i]] == null || typeof node[keys[i]] !== 'object') node[keys[i]] = {};
+      node = node[keys[i]];
+    }
+    node[keys[keys.length - 1]] = value;
+  }
+
+  function schemaInputId(path) { return 'sch-' + path.replace(/\./g, '-'); }
+
+  // Build a single field HTML element from a schema entry.
+  function schemaFieldHtml(entry) {
+    const id = schemaInputId(entry.path);
+    const restartBadge = entry.restart ? ' <span class="s-hint" style="color:#d97706;">⚡ restart</span>' : '';
+    const hintHtml = '<div class="s-hint" style="margin:-6px 0 8px 90px;font-size:11px;opacity:0.7;">'
+      + esc(entry.hint) + restartBadge + '</div>';
+    if (entry.kind === 'textarea') {
+      return '<div class="s-field"><span>' + esc(entry.label) + '</span>'
+        + '<textarea id="' + id + '" class="s-textarea" rows="2" maxlength="5000"'
+        + ' data-path="' + esc(entry.path) + '"'
+        + ' placeholder="Empty = built-in default"></textarea></div>'
+        + hintHtml;
+    }
+    // numeric input
+    const step = entry.type === 'float' ? 0.01 : 1;
+    return '<div class="s-field"><span>' + esc(entry.label) + '</span>'
+      + '<input id="' + id + '" type="number"'
+      + ' min="' + entry.min + '" max="' + entry.max + '" step="' + step + '"'
+      + ' data-path="' + esc(entry.path) + '"'
+      + ' /></div>'
+      + hintHtml;
+  }
+
+  // Build schema-driven fields into a tab container. Groups by section, skips entries
+  // that already have an HTML element (e.g. the pre-prompt selector is manual HTML).
+  async function buildSchemaFields() {
+    try { _schema = await cue.settingsSchema(); } catch { _schema = []; }
+    if (!_schema || !_schema.length) return;
+
+    // Group entries by tab
+    const byTab = {};
+    for (const entry of _schema) {
+      const tab = entry.tab || 'advanced';
+      if (!byTab[tab]) byTab[tab] = [];
+      byTab[tab].push(entry);
+    }
+
+    // For each tab, find the container and append schema fields
+    for (const [tab, entries] of Object.entries(byTab)) {
+      const container = document.querySelector('.s-page[data-tab="' + tab + '"]');
+      if (!container) continue;
+      let html = '';
+      let currentSection = '';
+      for (const entry of entries) {
+        // Skip if an element with this id already exists in the DOM (manual HTML takes precedence)
+        if (document.getElementById(schemaInputId(entry.path))) continue;
+        if (entry.section !== currentSection) {
+          if (currentSection) html += '</div>';
+          currentSection = entry.section;
+          html += '<label class="s-label">' + esc(entry.section) + '</label><div class="s-adv-group">';
+        }
+        html += schemaFieldHtml(entry);
+      }
+      if (currentSection) html += '</div>';
+      if (html) container.insertAdjacentHTML('beforeend', html);
+    }
+  }
+
+  // Fill all schema-driven fields from settings.
+  function fillSchemaFields() {
+    if (!_schema || !settings) return;
+    for (const entry of _schema) {
+      const el = document.getElementById(schemaInputId(entry.path));
+      if (!el) continue;
+      const val = resolvePath(settings, entry.path);
+      el.value = (val !== undefined && val !== null) ? val : entry.default;
+    }
+  }
+
+  // Save all schema-driven fields back to settings.
+  function saveSchemaFields() {
+    if (!_schema || !settings) return;
+    let needsRestart = false;
+    for (const entry of _schema) {
+      const el = document.getElementById(schemaInputId(entry.path));
+      if (!el) continue;
+      const raw = el.value;
+      let val;
+      if (entry.type === 'int') { val = parseInt(raw, 10); if (!Number.isFinite(val)) val = entry.default; }
+      else if (entry.type === 'float') { val = parseFloat(raw); if (!Number.isFinite(val)) val = entry.default; }
+      else { val = raw; } // string
+      // clamp numeric
+      if (entry.type !== 'string') {
+        if (typeof entry.min === 'number' && val < entry.min) val = entry.min;
+        if (typeof entry.max === 'number' && val > entry.max) val = entry.max;
+      }
+      setPath(settings, entry.path, val);
+      if (entry.restart) needsRestart = true;
+    }
+    const banner = document.getElementById('adv-restart-hint');
+    if (banner) banner.style.display = needsRestart ? '' : 'none';
+  }
+
   // ---- boot --------------------------------------------------------------
   (async function boot() {
     settings = await cue.settingsGet();
     assistShortcut = (settings.shortcuts && settings.shortcuts.assist) || DEFAULT_ASSIST_SHORTCUT;
     syncAssistShortcutLabels();
     smartBtn.classList.toggle('on', !!settings.smart);
+    await buildSchemaFields();
     showExample();
     syncPlaceholder();
     const st = await cue.captureState();

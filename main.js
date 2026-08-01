@@ -1,11 +1,6 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { loadDotenv } = require('./src/env');
-// Populate process.env from .env (CUE_ENV_PATH → userData/.env → cwd/.env) BEFORE the store
-// require, so store.load()'s CUE_* override pass sees the env-supplied values. No-op if no
-// .env exists; shell-set vars always win.
-loadDotenv();
 const store = require('./src/store');
 // Load provider descriptors into the registry (R1c). Requiring src/store already triggers
 // loadProviders() at store's module load (so DEFAULTS can fold provider defaultSettings), so this
@@ -53,6 +48,12 @@ function getSttManager() {
       fs,
       logger: getLogger(settings),
       logging: settings.stt && settings.stt.logging,
+      pythonSettings: settings.python,
+      maxSpawnFailures: settings.stt && settings.stt.maxSpawnFailures,
+      helloTimeoutMs: settings.stt && settings.stt.helloTimeoutMs,
+      callTimeoutMs: settings.stt && settings.stt.callTimeoutMs,
+      modelReloadTimeoutMs: settings.stt && settings.stt.modelReloadTimeoutMs,
+      shutdownGraceMs: settings.stt && settings.stt.shutdownGraceMs,
     });
     sttManager.setModelsDir(path.join(app.getPath('userData'), 'stt-models'));
     // Surface manager status + progress to the renderer. Status feeds the capture-stream badge
@@ -71,7 +72,7 @@ const { composeSystem } = require('./src/prompt-compose');
 const { resolveField, registrySpec } = require('./src/prompt-registry');
 const { createMemoryRunner } = require('./src/memory');
 const { loadSkillDir, clearSkillCache } = require('./src/skills');
-const { transcriptState, pushFinal, setPartial, clearPartial, liveTranscriptForPrompt, getFinals } = require('./src/transcript');
+const { transcriptState, pushFinal, setPartial, clearPartial, liveTranscriptForPrompt, getFinals, setTranscriptConfig } = require('./src/transcript');
 const { normalizeSDKError, userMessage } = require('./src/errors');
 const { rms16 } = require('./src/wav');
 
@@ -79,12 +80,25 @@ let win = null;
 let registeredAssistShortcut = null;
 
 const DEFAULT_ASSIST_SHORTCUT = 'CommandOrControl+Return';
-const RESERVED_SHORTCUTS = new Set([
+// Default reserved shortcuts (before settings are loaded). At runtime, getReservedShortcuts()
+// reads the configured values so the Assist shortcut can't collide with whatever the user set.
+const DEFAULT_RESERVED = [
   'commandorcontrol+h',
   'commandorcontrol+shift+x',
-  'control+alt+a', // immediate assist — always-on, not user-configurable (see registerShortcuts)
-  'control+alt+c'  // show/hide the overlay — always-on, not user-configurable (see registerShortcuts)
-]);
+  'control+alt+a',
+  'control+alt+c',
+];
+function getReservedShortcuts() {
+  try {
+    const sc = (store.getSettings() && store.getSettings().shortcuts) || {};
+    const set = new Set(DEFAULT_RESERVED);
+    if (sc.leetcode) set.add(sc.leetcode.toLowerCase());
+    if (sc.quit) set.add(sc.quit.toLowerCase());
+    if (sc.immediateAssist) set.add(sc.immediateAssist.toLowerCase());
+    if (sc.toggleOverlay) set.add(sc.toggleOverlay.toLowerCase());
+    return set;
+  } catch { return new Set(DEFAULT_RESERVED); }
+}
 
 // -------- capture / transcript state --------
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
@@ -106,14 +120,13 @@ let memoryRunner = null;
 // TR_MAX_TURNS, plus live partials and a summary watermark. The lone read site (runFeature's
 // def.build) consumes liveTranscriptForPrompt() (finals + current partials); streaming finals
 // are pushed via pushFinal(), batch finals too.
-const FLUSH_MS = 3500;
-const MIN_BYTES = Math.floor(16000 * 2 * 0.6); // ~0.6s
-const RMS_GATE = 240;
-// STT flush watchdog (D4/D5). The LLM path has a 30s idle watchdog; STT had none, so a hung
-// cloud transcribe call pinned `state.transcribing[ch]=true` forever — every later flush no-oped
-// and the channel went permanently, silently dead (the literal "timeout that never resolves").
-// A single transcribe must return within this bound or the lock is released + the error surfaced.
-const STT_TRANSCRIBE_TIMEOUT_MS = 30000;
+// STT flush parameters — read from settings (configurable via Advanced tab or env vars).
+// The getters re-read on each use so changes take effect without restart (except the flush
+// loop interval, which requires re-arming).
+function sttFlushMs() { const s = store.getSettings(); return (s.stt && s.stt.flushMs) || 3500; }
+function sttMinBytes() { const s = store.getSettings(); return (s.stt && s.stt.minBytes) || 9600; }
+function sttRmsGate() { const s = store.getSettings(); return (s.stt && s.stt.rmsGate) || 240; }
+function sttTranscribeTimeout() { const s = store.getSettings(); return (s.stt && s.stt.transcribeTimeoutMs) || 30000; }
 let flushTimer = null;
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
@@ -193,8 +206,8 @@ async function flushChannel(channel) {
   if (!chunks.length) return;
   const pcm = Buffer.concat(chunks);
   buffers[channel] = [];
-  if (pcm.length < MIN_BYTES) return;
-  if (rms16(pcm) < RMS_GATE) return; // silence gate
+  if (pcm.length < sttMinBytes()) return;
+  if (rms16(pcm) < sttRmsGate()) return; // silence gate
 
   state.transcribing[channel] = true;
   let watchdog = null;
@@ -253,12 +266,13 @@ async function flushChannel(channel) {
       res = await Promise.race([
         stt.transcribe(pcm),
         new Promise((_, reject) => {
+          const timeout = sttTranscribeTimeout();
           watchdog = setTimeout(() => reject({
             timeout: true,
             message: 'Transcription timed out after ' +
-              (STT_TRANSCRIBE_TIMEOUT_MS / 1000) + 's',
+              (timeout / 1000) + 's',
             provider: stt.providers.join('/')
-          }), STT_TRANSCRIBE_TIMEOUT_MS);
+          }), timeout);
         }),
       ]);
     } finally {
@@ -336,7 +350,7 @@ function handleSttError(err, settings) {
 
 function startFlushLoop() {
   if (flushTimer) return;
-  flushTimer = setInterval(() => { flushChannel('you'); flushChannel('them'); }, FLUSH_MS);
+  flushTimer = setInterval(() => { flushChannel('you'); flushChannel('them'); }, sttFlushMs());
 }
 function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTimer = null; } }
 
@@ -507,7 +521,12 @@ async function runFeature(mode, userText) {
     send('llm:done', {});
     state.busy = false; // release main's latch without waiting for the hung stream to settle
   }
-  function armWatchdog() { disarmWatchdog(); watchdog = setTimeout(onWatchdog, 30000); }
+  function armWatchdog() {
+    disarmWatchdog();
+    const s = store.getSettings();
+    const timeout = (s.llm && s.llm.idleTimeoutMs) || 30000;
+    watchdog = setTimeout(onWatchdog, timeout);
+  }
   try {
     const settings = store.getSettings();
     const llm = createLLM(settings);
@@ -529,7 +548,11 @@ async function runFeature(mode, userText) {
     if (def.needsScreen) {
       appLog().debug('feature needs screen; capturing screenshot');
       try {
-        imageDataUrl = await captureScreenshot();
+        imageDataUrl = await captureScreenshot({
+          maxEdge: settings.screen && settings.screen.maxEdge,
+          quality: settings.screen && settings.screen.jpegQuality,
+          ttlMs: settings.screen && settings.screen.cacheTtlMs,
+        });
         appLog().debug({ bytes: imageDataUrl.length }, 'screenshot captured');
       }
       catch (e) {
@@ -592,7 +615,9 @@ async function regenerateResumeSummary() {
       imageDataUrl: null,
       onToken: () => { }, // accumulate silently — no renderer tokens for a background digest
     });
-    const clean = (digest || '').trim().slice(0, 1500);
+    const maxChars = (settings.resume && typeof settings.resume.maxSummaryChars === 'number')
+      ? settings.resume.maxSummaryChars : 1500;
+    const clean = (digest || '').trim().slice(0, maxChars);
     if (clean) store.setSettings({ resumeSummary: clean });
   } catch (e) {
     appLog().warn({ error: e && e.message }, 'resume digest failed');
@@ -601,6 +626,10 @@ async function regenerateResumeSummary() {
 
 // -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
+ipcMain.handle('settings:schema', () => {
+  const { uiEntries } = require('./src/config-schema');
+  return uiEntries();
+});
 ipcMain.handle('settings:set', (_e, patch) => {
   sttDisabled = false;
   sttStreamDisabled = false;
@@ -617,6 +646,12 @@ ipcMain.handle('settings:set', (_e, patch) => {
   // Skill edits on disk don't bump the skills dir mtime; a settings save is a natural moment to
   // drop the cache so the next composeSystem re-reads current skill contents.
   clearSkillCache();
+  // Live-apply settings that don't require a restart.
+  if (patch && patch.shortcuts) reapplyShortcuts();
+  if (patch && patch.stt && patch.stt.flushMs !== undefined) rearmFlushLoop();
+  if (patch && patch.transcript && patch.transcript.maxTurns !== undefined) {
+    setTranscriptConfig({ maxTurns: store.getSettings().transcript.maxTurns });
+  }
   return result;
 });
 ipcMain.handle('skills:reload', () => {
@@ -692,7 +727,7 @@ function normalizeShortcut(accelerator) {
 function registerAssistShortcut(accelerator) {
   const next = normalizeShortcut(accelerator) || DEFAULT_ASSIST_SHORTCUT;
   if (next.length > 80) return { ok: false, error: 'That shortcut is too long.' };
-  if (RESERVED_SHORTCUTS.has(next.toLowerCase())) {
+  if (getReservedShortcuts().has(next.toLowerCase())) {
     return { ok: false, error: 'That shortcut is reserved by another cue action.' };
   }
 
@@ -720,28 +755,62 @@ function setAssistShortcut(accelerator) {
 }
 
 function registerShortcuts() {
-  globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
-  globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
-  // Immediate assist: answer from the live transcript (finals + current partials) without waiting
-  // for the speaker to finish. Not user-configurable — reserved so the configurable Assist can't
-  // collide. STT sessions are owned by setCapturing and never gated by state.busy, so requesting
-  // an answer never interrupts the ongoing transcription stream (ADR-008).
-  globalShortcut.register('Control+Alt+A', () => runFeature('assist', ''));
-
-  // Show/hide the overlay. Not user-configurable — always available so the user can dismiss cue
-  // entirely (toolbar included) during a share/record and bring it back from anywhere. The
-  // renderer process stays alive while hidden, so capture + the live transcript keep running —
-  // hiding is purely visual and Ctrl+Alt+A still answers from the current speaker state.
-  globalShortcut.register('Control+Alt+C', () => toggleVisibility());
-
   const settings = store.getSettings();
-  const configured = settings.shortcuts && settings.shortcuts.assist;
+  const sc = settings.shortcuts || {};
+
+  // Register configurable shortcuts. Each falls back to the hardcoded default if the
+  // user's setting is empty or fails to register (e.g. already in use by another app).
+  const leetcodeKey = sc.leetcode || 'CommandOrControl+H';
+  const quitKey = sc.quit || 'CommandOrControl+Shift+X';
+  const immediateAssistKey = sc.immediateAssist || 'Control+Alt+A';
+  const toggleOverlayKey = sc.toggleOverlay || 'Control+Alt+C';
+
+  if (!globalShortcut.register(leetcodeKey, () => runFeature('leetcode', ''))) {
+    if (leetcodeKey !== 'CommandOrControl+H') {
+      globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
+    }
+  }
+  if (!globalShortcut.register(quitKey, () => app.quit())) {
+    if (quitKey !== 'CommandOrControl+Shift+X') {
+      globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
+    }
+  }
+  if (!globalShortcut.register(immediateAssistKey, () => runFeature('assist', ''))) {
+    if (immediateAssistKey !== 'Control+Alt+A') {
+      globalShortcut.register('Control+Alt+A', () => runFeature('assist', ''));
+    }
+  }
+  if (!globalShortcut.register(toggleOverlayKey, () => toggleVisibility())) {
+    if (toggleOverlayKey !== 'Control+Alt+C') {
+      globalShortcut.register('Control+Alt+C', () => toggleVisibility());
+    }
+  }
+
+  // Assist shortcut (already configurable via Settings → Shortcuts)
+  const configured = sc.assist;
   const result = registerAssistShortcut(configured || DEFAULT_ASSIST_SHORTCUT);
   if (!result.ok && configured && configured !== DEFAULT_ASSIST_SHORTCUT) {
     appLog().warn({ shortcut: configured, error: result.error }, 'unable to register Assist shortcut; falling back to default');
     const fallback = registerAssistShortcut(DEFAULT_ASSIST_SHORTCUT);
     if (fallback.ok) store.setSettings({ shortcuts: { assist: DEFAULT_ASSIST_SHORTCUT } });
   }
+}
+
+// Unregister all shortcuts + the Assist shortcut, then re-register from current settings.
+// Called from settings:set so shortcut changes apply without an app restart.
+function reapplyShortcuts() {
+  globalShortcut.unregisterAll();
+  registeredAssistShortcut = null;
+  registerShortcuts();
+}
+
+// Re-arm the batch STT flush loop with the current settings interval. If the loop is
+// running, stop it and restart with the updated interval so a changed stt.flushMs applies
+// immediately (no restart required).
+function rearmFlushLoop() {
+  if (!flushTimer) return;
+  stopFlushLoop();
+  startFlushLoop();
 }
 
 // -------- lifecycle --------
@@ -786,6 +855,9 @@ app.whenReady().then(() => {
 
   createWindow();
   registerShortcuts();
+  // Configure transcript ring-buffer from settings (must run before any pushFinal).
+  const initSettings = store.getSettings();
+  setTranscriptConfig({ maxTurns: initSettings.transcript && initSettings.transcript.maxTurns });
 
   // Rolling-summary compaction runner. The watermark IS transcriptState.lastSummarizedTs (src/
   // transcript.js exposes it for memory.js to advance), so this module advances it through the
@@ -800,6 +872,10 @@ app.whenReady().then(() => {
     // Rolling-summary compaction prompt is user-overridable (Settings → Prompts); falls back to
     // MEMORY_SUMMARY_PROMPT via resolveField (ADR-014). A pure closure over store → registry.
     getSystemPrompt: () => resolveField('memorySummaryPrompt', store.getSettings()),
+    // Lazy getters so memory params apply without restart.
+    getMinNewTurns: () => { const s = store.getSettings(); return s.memory && s.memory.minNewTurns; },
+    getMaxSummaryChars: () => { const s = store.getSettings(); return s.memory && s.memory.maxSummaryChars; },
+    getIntervalMs: () => { const s = store.getSettings(); return s.memory && s.memory.summaryIntervalMs; },
     summarize: async ({ system, userMessage }) => {
       const settings = store.getSettings();
       const llm = createLLM(settings);

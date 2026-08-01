@@ -77,13 +77,14 @@ function parseJsonLine(line) {
 // construct it with a fake `send` (records/inspects writes) and feed server lines
 // back through `feedLine` to assert resolves/emit. `onEvent` receives bare events.
 class RpcChannel {
-  constructor({ send, onEvent }) {
+  constructor({ send, onEvent, defaultTimeout }) {
     this._send = send;
     this._onEvent = onEvent || (() => {});
     this._pending = new Map();
     this._id = 1;
+    this._defaultTimeout = typeof defaultTimeout === 'number' ? defaultTimeout : DEFAULT_CALL_TIMEOUT_MS;
   }
-  request(method, params = {}, { timeout = DEFAULT_CALL_TIMEOUT_MS } = {}) {
+  request(method, params = {}, { timeout = this._defaultTimeout } = {}) {
     return new Promise((resolve, reject) => {
       const id = String(this._id++);
       const entry = { resolve, reject };
@@ -192,26 +193,36 @@ function requirementsHash(fs) {
   catch { return ''; }
 }
 
-// Build the CUE_STT_LOG_* environment the spawned Python service reads at startup
-// (python/cue_stt_logging.py setup_logging()). `logDir` is resolved to an ABSOLUTE
-// path here (via the injected getPath) so the Python side's os.makedirs works
-// regardless of the venv's cwd, and the Node + Python rotating log files share one
-// directory. Booleans/ints are stringified only when explicitly set, so an absent
-// key lets Python apply its own default. Pure given (logging, getPath); a mkdir
-// failure on the resolved dir is swallowed (non-fatal — Python degrades to
-// console-only logging, matching cue_stt_logging.py's own OSError guard).
-function buildPyLogEnv(logging, getPath) {
-  if (!logging) return {};
+// Build the environment the spawned Python service reads at startup (logging +
+// VAD/speech params from settings). `logDir` is resolved to an ABSOLUTE path here
+// (via the injected getPath) so the Python side's os.makedirs works regardless of the
+// venv's cwd, and the Node + Python rotating log files share one directory. Booleans/ints
+// are stringified only when explicitly set, so an absent key lets Python apply its own
+// default. Pure given (logging, pythonSettings, getPath); a mkdir failure on the
+// resolved dir is swallowed (non-fatal — Python degrades to console-only logging).
+function buildPyLogEnv(logging, pythonSettings, getPath) {
   const env = {};
-  if (logging.level != null) env.CUE_STT_LOG_LEVEL = String(logging.level);
-  if (logging.console != null) env.CUE_STT_LOG_CONSOLE = String(logging.console);
-  if (logging.file != null) env.CUE_STT_LOG_FILE = String(logging.file);
-  if (logging.pretty != null) env.CUE_STT_LOG_PRETTY = String(logging.pretty);
-  const rotate = logging.rotate || {};
-  if (rotate.sizeBytes != null) env.CUE_STT_LOG_ROTATE_SIZE = String(rotate.sizeBytes);
-  if (rotate.count != null) env.CUE_STT_LOG_ROTATE_COUNT = String(rotate.count);
-  try { env.CUE_STT_LOG_DIR = resolveLogDir(logging.logDir, getPath); }
-  catch { /* unwritable/invalid dir is non-fatal: Python logs to console only */ }
+  // --- logging ---
+  if (logging) {
+    if (logging.level != null) env.CUE_STT_LOG_LEVEL = String(logging.level);
+    if (logging.console != null) env.CUE_STT_LOG_CONSOLE = String(logging.console);
+    if (logging.file != null) env.CUE_STT_LOG_FILE = String(logging.file);
+    if (logging.pretty != null) env.CUE_STT_LOG_PRETTY = String(logging.pretty);
+    const rotate = logging.rotate || {};
+    if (rotate.sizeBytes != null) env.CUE_STT_LOG_ROTATE_SIZE = String(rotate.sizeBytes);
+    if (rotate.count != null) env.CUE_STT_LOG_ROTATE_COUNT = String(rotate.count);
+    try { env.CUE_STT_LOG_DIR = resolveLogDir(logging.logDir, getPath); }
+    catch { /* unwritable/invalid dir is non-fatal: Python logs to console only */ }
+  }
+  // --- Python VAD / speech params (from settings.python.*) ---
+  if (pythonSettings) {
+    if (pythonSettings.vadAggressiveness != null) env.CUE_STT_VAD_AGG = String(pythonSettings.vadAggressiveness);
+    if (pythonSettings.endMs != null) env.CUE_STT_VAD_END_MS = String(pythonSettings.endMs);
+    if (pythonSettings.minSpeechMs != null) env.CUE_STT_MIN_SPEECH_MS = String(pythonSettings.minSpeechMs);
+    if (pythonSettings.partialEveryS != null) env.CUE_STT_PARTIAL_EVERY_S = String(pythonSettings.partialEveryS);
+    if (pythonSettings.energyGate != null) env.CUE_STT_ENERGY_GATE = String(pythonSettings.energyGate);
+    if (pythonSettings.beamSize != null) env.CUE_STT_BEAM_SIZE = String(pythonSettings.beamSize);
+  }
   return env;
 }
 
@@ -222,7 +233,12 @@ module.exports = {
   PY_CANDIDATES, MAX_SPAWN_FAILURES, HELLO_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS,
 
   createSttProcessManager({ spawn, spawnSync, fs, getPath = defaultGetPath,
-    logger = _defaultNoop, logging = null,
+    logger = _defaultNoop, logging = null, pythonSettings = null,
+    maxSpawnFailures: maxFailParam,
+    helloTimeoutMs: helloTimeoutParam,
+    callTimeoutMs: callTimeoutParam,
+    modelReloadTimeoutMs: reloadTimeoutParam,
+    shutdownGraceMs: shutdownGraceParam,
     setTimeout: setTimer = global.setTimeout, clearTimeout: clearTimer = global.clearTimeout }) {
     const platform = process.platform;
     let modelsDir = path.join(getPath('userData'), 'stt-models');
@@ -230,6 +246,13 @@ module.exports = {
     // caller having to bind it each call. noopLogger.child() returns the same noop,
     // so tests pay nothing.
     const log = (logger && logger.child) ? logger.child({ module: 'stt-process' }) : logger;
+
+    // Configurable timeouts from settings (env-only tier in config-schema.js).
+    const _maxSpawnFailures = typeof maxFailParam === 'number' ? maxFailParam : MAX_SPAWN_FAILURES;
+    const _helloTimeoutMs = typeof helloTimeoutParam === 'number' ? helloTimeoutParam : HELLO_TIMEOUT_MS;
+    const _callTimeoutMs = typeof callTimeoutParam === 'number' ? callTimeoutParam : DEFAULT_CALL_TIMEOUT_MS;
+    const _modelReloadTimeoutMs = typeof reloadTimeoutParam === 'number' ? reloadTimeoutParam : MODEL_RELOAD_TIMEOUT_MS;
+    const _shutdownGraceMs = typeof shutdownGraceParam === 'number' ? shutdownGraceParam : SHUTDOWN_GRACE_MS;
 
     // -- process + venv state --
     let child = null;
@@ -249,6 +272,7 @@ module.exports = {
 
     const channel = new RpcChannel({
       send: (line) => { if (child && child.stdin && !child.stdin.destroyed) child.stdin.write(line); },
+      defaultTimeout: _callTimeoutMs,
       onEvent: (obj) => {
         if (obj.m === 'status') {
           diag.status = obj.status || diag.status;
@@ -375,7 +399,7 @@ module.exports = {
       // Hand the logging config to the Python service as env (python/cue_stt_logging.py
       // reads CUE_STT_LOG_* at startup). Merged onto process.env so PATH etc. survive;
       // a resolved ABSOLUTE CUE_STT_LOG_DIR keeps the Node + Python rotating logs in one dir.
-      const pyLogEnv = buildPyLogEnv(logging, getPath);
+      const pyLogEnv = buildPyLogEnv(logging, pythonSettings, getPath);
       const env = Object.keys(pyLogEnv).length ? { ...process.env, ...pyLogEnv } : undefined;
       child = spawn(venv.venvPython, ['-u', SCRIPT_PATH], { stdio: ['pipe', 'pipe', 'pipe'], env });
       log.debug({ script: SCRIPT_PATH, venv: venv.venvPython }, 'spawning stt service');
@@ -396,7 +420,7 @@ module.exports = {
       }
       spawnService();
       try {
-        const hello = await channel.request('hello', {}, { timeout: HELLO_TIMEOUT_MS });
+        const hello = await channel.request('hello', {}, { timeout: _helloTimeoutMs });
         if (hello) {
           diag.pythonVersion = hello.python_version || diag.pythonVersion;
           diag.fasterWhisperVersion = hello.faster_whisper_version || diag.fasterWhisperVersion;
@@ -412,7 +436,7 @@ module.exports = {
           // a restart mid-session: re-load the last (cached) model so streaming sids can resume.
           // Finite timeout — the cache is local, so this is seconds, and a stuck reload must not
           // pin the service forever (it latches via onExit's failure path on a hung load).
-          try { await channel.request('load', lastLoad, { timeout: MODEL_RELOAD_TIMEOUT_MS }); }
+          try { await channel.request('load', lastLoad, { timeout: _modelReloadTimeoutMs }); }
           catch (e) { log.error({ error: e && e.message }, 're-load after restart failed'); }
         }
         for (const cb of listeners.status) {
@@ -446,7 +470,7 @@ module.exports = {
       }
       // unexpected: restart with backoff, latch after MAX_SPAWN_FAILURES
       spawnFailures++;
-      if (spawnFailures > MAX_SPAWN_FAILURES) {
+      if (spawnFailures > _maxSpawnFailures) {
         latched = true;
         diag.status = 'latched';
         diag.lastError = `service exited ${spawnFailures}× — gave up; degrade to batch`;
@@ -485,7 +509,7 @@ module.exports = {
       try { if (child && child.stdin && !child.stdin.destroyed) child.stdin.end(); } catch {}
       const c = child;
       if (c) {
-        setTimer(() => { try { if (!c.killed) c.kill(); } catch {} }, SHUTDOWN_GRACE_MS);
+        setTimer(() => { try { if (!c.killed) c.kill(); } catch {} }, _shutdownGraceMs);
       }
       child = null;
       running = false;

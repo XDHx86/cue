@@ -15,6 +15,10 @@ const { DEFAULT_PRE_PROMPT_TEMPLATE } = require('./prompt-registry');
 const registry = require('./registry');
 const { loadProviders } = require('./registry-loader');
 loadProviders({ _require: require });
+// Schema-driven config (central registry of every configurable runtime value). Supplies defaults,
+// validation, env-var mappings, and the renderer's Advanced Settings UI spec — all from one
+// source of truth. Requires registry-loader to have run first (foldLlmDefaults reads the registry).
+const { schemaDefaults, validate } = require('./config-schema');
 
 const FILE = path.join(app.getPath('userData'), 'cue-data.json');
 
@@ -110,7 +114,13 @@ function foldLlmDefaults() {
   }
   return acc;
 }
-const DEFAULTS = deepMerge(BASE_DEFAULTS, foldLlmDefaults());
+// DEFAULTS merges three layers: BASE_DEFAULTS (the non-provider skeleton) → provider
+// defaultSettings (folded in by the registry) → schemaDefaults (from config-schema.js,
+// which holds every configurable runtime value). The schema layer adds nested keys like
+// llm.maxTokens, memory.minNewTurns, stt.maxSpawnFailures, ui.zoomMin, etc. that the
+// BASE_DEFAULTS skeleton doesn't declare — deepMerge creates them. Existing keys in
+// BASE_DEFAULTS are preserved; only new paths are added.
+const DEFAULTS = deepMerge(deepMerge(BASE_DEFAULTS, foldLlmDefaults()), schemaDefaults());
 
 let data = null;
 
@@ -159,12 +169,6 @@ function load() {
     delete data.prePromptTemplate;
   }
 
-  // Apply CUE_* env-var overrides (populated by src/env.js before this require resolves).
-  // Runtime-only: these are never saved to cue-data.json. The auto-switch below still runs
-  // after, so an env-supplied key can make a provider ready without flipping the persisted
-  // provider away from the user's choice.
-  applyEnvOverrides(data);
-
   // Auto-switch provider if the current one has no key, but another one does.
   if (!data.apiKeys[data.provider]) {
     const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia'];
@@ -175,57 +179,13 @@ function load() {
     }
   }
 
+  // Validate and coerce all schema-managed settings. This runs once on first load:
+  // out-of-range values are clamped, NaN/defaulted, and corrupt data is repaired.
+  validate(data);
+
   return data;
 }
 
-// Schema-aware mapping of CUE_* env vars into settings paths. Run-time-only overrides —
-// the auto-switch and persisted cue-data.json both see the overridden values, but setSettings
-// never writes them to disk because they live in env, not in the patch.
-const ENV_OVERRIDES = {
-  CUE_OPENAI_API_KEY: ['apiKeys', 'openai'],
-  CUE_ANTHROPIC_API_KEY: ['apiKeys', 'anthropic'],
-  CUE_GEMINI_API_KEY: ['apiKeys', 'gemini'],
-  CUE_NVIDIA_API_KEY: ['apiKeys', 'nvidia'],
-  CUE_DEEPGRAM_API_KEY: ['apiKeys', 'deepgram'],
-  CUE_OLLAMA_API_KEY: ['apiKeys', 'ollama'],
-  CUE_OLLAMA_BASE_URL: ['ollama', 'baseURL'],
-  CUE_STT_PROVIDER: ['stt', 'provider'],
-  CUE_STT_ENABLED: ['stt', 'enabled'],
-  CUE_STT_ENGINE: ['stt', 'engine'],        // local engine selector (not under stt.local)
-  CUE_STT_LOCAL_MODEL: ['stt', 'local', 'model'],
-  CUE_STT_LOCAL_DEVICE: ['stt', 'local', 'device'],
-  CUE_STT_LOCAL_COMPUTE: ['stt', 'local', 'computeType'],
-  CUE_STT_LOCAL_LANGUAGE: ['stt', 'local', 'language'],
-  CUE_STT_LOCAL_VAD: ['stt', 'local', 'vad'],
-  CUE_FASTER_WHISPER_URL: ['stt', 'fasterWhisperURL'],
-  CUE_DEEPGRAM_URL: ['stt', 'deepgramURL'],
-  // STT logging (ADR-014): Pino (Node) + Loguru (Python). Runtime-only, never
-  // persisted — same rule as every other CUE_* override. Booleans/ints arrive as
-  // strings; src/logger.js coerces before use.
-  CUE_STT_LOG_LEVEL: ['stt', 'logging', 'level'],
-  CUE_STT_LOG_DIR: ['stt', 'logging', 'logDir'],
-  CUE_STT_LOG_CONSOLE: ['stt', 'logging', 'console'],
-  CUE_STT_LOG_FILE: ['stt', 'logging', 'file'],
-  CUE_STT_LOG_PRETTY: ['stt', 'logging', 'pretty'],
-  CUE_STT_LOG_ROTATE_SIZE: ['stt', 'logging', 'rotate', 'sizeBytes'],
-  CUE_STT_LOG_ROTATE_COUNT: ['stt', 'logging', 'rotate', 'count'],
-};
-
-function applyEnvOverrides(data) {
-  for (const [envName, path] of Object.entries(ENV_OVERRIDES)) {
-    const val = process.env[envName];
-    if (val === undefined) continue;
-    // Walk the path; only set the leaf if every intermediate node already exists in data,
-    // so overrides for not-yet-present sub-objects (ollama/stt added by later commits) are
-    // silent no-ops rather than creating stray keys.
-    let node = data;
-    for (let i = 0; i < path.length - 1; i++) {
-      if (node[path[i]] == null || typeof node[path[i]] !== 'object') { node = null; break; }
-      node = node[path[i]];
-    }
-    if (node) node[path[path.length - 1]] = val;
-  }
-}
 function save() { try { fs.writeFileSync(FILE, JSON.stringify(data, null, 2)); } catch (e) { /* ignore */ } }
 
 module.exports = {

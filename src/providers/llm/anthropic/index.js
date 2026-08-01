@@ -34,8 +34,8 @@ defineProvider({
     const id = 'anthropic';
     const apiKey = (settings.apiKeys || {})[id];
     const model = ((settings.models || {})[id] || {})[settings.smart ? 'smart' : 'fast'];
-    // Anthropic requires max_tokens; pin to 4096 (effectively unlimited for one response).
-    const maxTokens = 4096;
+    // Anthropic requires max_tokens; configurable via settings.llm.maxTokens.
+    const maxTokens = (settings.llm && settings.llm.maxTokens) || 4096;
     return {
       provider: id,
       model,

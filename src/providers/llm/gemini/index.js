@@ -34,7 +34,7 @@ defineProvider({
     const id = 'gemini';
     const apiKey = (settings.apiKeys || {})[id];
     const model = ((settings.models || {})[id] || {})[settings.smart ? 'smart' : 'fast'];
-    const maxTokens = 4096;
+    const maxTokens = (settings.llm && settings.llm.maxTokens) || 4096;
     return {
       provider: id,
       model,

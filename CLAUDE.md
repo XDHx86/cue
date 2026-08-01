@@ -36,8 +36,7 @@ tool first; for seams & invariants read [.claude/docs/architecture.md](.claude/d
   meeting audio) — "who said what" survives transcript → prompt → render. Never collapse channels.
 - **No build step, no native modules by design.** Don't introduce a bundler, TypeScript, or a
   dep chain without a decision in [.claude/docs/decisions.md](.claude/docs/decisions.md). If a
-  feature tempts a native module, find a dependency-free path first (the hand-rolled
-  [src/env.js](src/env.js) `.env` loader is the precedent).
+  feature tempts a native module, find a dependency-free path first.
 - **Audio is captured in the renderer, not main** — it reuses cue's own Screen-Recording grant,
   so there is no helper binary to authorize.
 - **LLM and STT are decoupled** ([src/llm.js](src/llm.js) vs [src/stt.js](src/stt.js)) because
@@ -81,10 +80,10 @@ locally. Details at [docs/release.md](docs/release.md).
 ## Coding & debugging notes
 
 - **Debug logging** — `const DEBUG = false` at the top of [main.js](main.js#L1). Flip to `true`
-  for traces; **don't commit it true**. `CUE_ENV_DEBUG=1` for the `.env` loader. (LLM traces flow
-  through the lazy `child('llm')` Pino logger in [src/providers/llm/shared.js](src/providers/llm/shared.js),
-  debug-level and silent at the default info level — the `src/llm.js` `DEBUG` flag is retired; it's
-  now a thin registry delegate.)
+  for traces; **don't commit it true**. (LLM traces flow through the lazy `child('llm')` Pino
+  logger in [src/providers/llm/shared.js](src/providers/llm/shared.js), debug-level and silent
+  at the default info level — the `src/llm.js` `DEBUG` flag is retired; it's now a thin registry
+  delegate.)
 - **Model names drift** — defaults in [src/store.js](src/store.js) (`gpt-4o`, `claude-3-5-sonnet-latest`,
   …) are user-editable and change fast — treat them as defaults, not constraints.
 - **`process.platform` branches** are scattered (window flags, onboarding, shortcut keycaps, the

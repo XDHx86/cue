@@ -51,7 +51,8 @@ function resolvePrePrompt(settings) {
 function skillsSection(settings) {
   const s = settings || {};
   if (s.skillEnabled === false) return '';
-  const skills = loadSkillDir(s.skillDir || '');
+  const maxChars = (s.skills && typeof s.skills.maxChars === 'number') ? s.skills.maxChars : undefined;
+  const skills = loadSkillDir(s.skillDir || '', { maxChars });
   if (!skills.length) return '';
   const body = skills.map((sk) => {
     const head = `### ${sk.name}`;
@@ -71,8 +72,10 @@ function readSummary(memoryState) {
 
 function memorySection(settings, memoryState) {
   const s = settings || {};
-  const summary = readSummary(memoryState).slice(0, MAX_MEMORY_SUMMARY_CHARS).trim();
-  const notes = (s.memory && typeof s.memory.notes === 'string' ? s.memory.notes : '').slice(0, MAX_NOTES_CHARS).trim();
+  const maxSummary = (s.memory && typeof s.memory.maxSummaryChars === 'number') ? s.memory.maxSummaryChars : MAX_MEMORY_SUMMARY_CHARS;
+  const maxNotes = (s.memory && typeof s.memory.maxNotesChars === 'number') ? s.memory.maxNotesChars : MAX_NOTES_CHARS;
+  const summary = readSummary(memoryState).slice(0, maxSummary).trim();
+  const notes = (s.memory && typeof s.memory.notes === 'string' ? s.memory.notes : '').slice(0, maxNotes).trim();
   if (!summary && !notes) return '';
   const parts = [];
   if (summary) parts.push('Rolling summary of the conversation so far:\n' + summary);

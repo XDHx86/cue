@@ -111,7 +111,9 @@ class LocalFasterWhisperSession {
   _bufferPreSid(buf) {
     this._preSid.push(buf);
     let total = 0; for (const b of this._preSid) total += b.length;
-    while (total > PRE_SID_BYTES && this._preSid.length > 1) total -= this._preSid.shift().length;
+    const preSidCap = (this.settings.stt && typeof this.settings.stt.preSidBytes === 'number')
+      ? this.settings.stt.preSidBytes : PRE_SID_BYTES;
+    while (total > preSidCap && this._preSid.length > 1) total -= this._preSid.shift().length;
   }
   _flushPreSid() {
     if (!this.sid || this._closed || !this._preSid.length) { this._preSid = []; return; }
@@ -143,10 +145,10 @@ class LocalFasterWhisperSession {
           if (this.onStatus) this.onStatus({ active: false, starting: true, reason: 'preparing model (' + params.name + ') — downloading…' });
           await this.manager.call('model_download',
             { name: params.name, download_root: params.download_root },
-            { timeout: MODEL_DOWNLOAD_TIMEOUT_MS });
+            { timeout: (this.settings.stt && this.settings.stt.modelDownloadTimeoutMs) || MODEL_DOWNLOAD_TIMEOUT_MS });
         }
         if (this.onStatus) this.onStatus({ active: false, starting: true, reason: 'loading model (' + params.name + ')…' });
-        await this.manager.call('load', params, { timeout: MODEL_LOAD_TIMEOUT_MS });
+        await this.manager.call('load', params, { timeout: (this.settings.stt && this.settings.stt.modelLoadTimeoutMs) || MODEL_LOAD_TIMEOUT_MS });
         this.manager.setLastLoad(params);
       }
       const start = await this.manager.call('stream_start', { language: this.language, vad: params.vad });

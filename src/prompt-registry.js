@@ -117,6 +117,11 @@ function resolveField(id, settings) {
     const text = (typeof o.text === 'string' ? o.text : '').trim();
     if (text) return text;
     const opt = (o.option && field.options[o.option]) ? o.option : field.defaultOption;
+    // Check for a user-edited built-in template text before falling back to the default.
+    // User edits live in settings.promptOverrides.prepromptTemplates.<id>.
+    const templates = (settings && settings.promptOverrides && settings.promptOverrides.prepromptTemplates) || {};
+    const edited = typeof templates[opt] === 'string' ? templates[opt].trim() : '';
+    if (edited) return edited;
     return (field.options[opt] && field.options[opt].text) || '';
   }
   const t = typeof ov === 'string' ? ov.trim() : '';
@@ -140,14 +145,32 @@ function isOverridden(id, settings) {
   const field = byId.get(id);
   if (!field) return false;
   const ov = (settings && settings.promptOverrides && settings.promptOverrides[id]) || null;
-  if (!ov) return false;
+  if (!ov) {
+    // Even with no explicit override, a built-in template may have been edited via
+    // settings.promptOverrides.prepromptTemplates.<id>.
+    if (field.kind === 'select') {
+      const templates = (settings && settings.promptOverrides && settings.promptOverrides.prepromptTemplates) || {};
+      for (const optId of Object.keys(field.options)) {
+        const edited = typeof templates[optId] === 'string' ? templates[optId].trim() : '';
+        if (edited && edited !== field.options[optId].text) return true;
+      }
+    }
+    return false;
+  }
   if (field.kind === 'select') {
     if (!ov || typeof ov !== 'object') return false;
     const text = (typeof ov.text === 'string' ? ov.text : '').trim();
     const option = typeof ov.option === 'string' ? ov.option : '';
     const onCustom = option === 'custom';
     const editedBuiltin = !!option && field.options[option] && text && text !== field.options[option].text;
-    return onCustom ? !!text : editedBuiltin;
+    if (onCustom ? !!text : editedBuiltin) return true;
+    // Also check for built-in template edits
+    const templates = (settings && settings.promptOverrides && settings.promptOverrides.prepromptTemplates) || {};
+    for (const optId of Object.keys(field.options)) {
+      const edited = typeof templates[optId] === 'string' ? templates[optId].trim() : '';
+      if (edited && edited !== field.options[optId].text) return true;
+    }
+    return false;
   }
   return typeof ov === 'string' && ov.trim().length > 0;
 }

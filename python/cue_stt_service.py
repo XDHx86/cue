@@ -48,13 +48,30 @@ log = get_logger("cue_stt_service")
 
 # ---- audio / VAD constants (ported from docs/faster-whisper-setup.md) ----
 SR = 16000
-VAD_AGG = 2                  # webrtcvad aggressiveness 0–3
-VAD_MS = 30                  # webrtcvad frame sizes are 10/20/30 ms
+VAD_MS = 30                  # webrtcvad frame sizes are 10/20/30 ms (WebRTC C API constraint)
 VAD_BYTES = int(SR * 2 * VAD_MS / 1000)  # 960 bytes per 30 ms Int16 frame
-END_MS = 700                 # trailing silence that ends an utterance
-MIN_SP_MS = 400             # ignore voiced blips shorter than this
-PARTIAL_EVERY_S = 0.4       # re-transcribe cadence while speech continues
-ENERGY_GATE = 0.010         # RMS fallback gate if webrtcvad is unavailable
+
+# Configurable via CUE_STT_* env vars (passed by Node src/stt-process.js on spawn).
+# Defaults match the original hardcoded values.
+def _env_int(name, default):
+    v = os.environ.get(name)
+    if v is None or v == '': return default
+    try: n = int(v)
+    except (TypeError, ValueError): return default
+    return n if n > 0 else default
+
+def _env_float(name, default):
+    v = os.environ.get(name)
+    if v is None or v == '': return default
+    try: n = float(v)
+    except (TypeError, ValueError): return default
+    return n if n > 0 else default
+
+VAD_AGG = _env_int('CUE_STT_VAD_AGG', 2)                  # webrtcvad aggressiveness 0–3
+END_MS = _env_int('CUE_STT_VAD_END_MS', 700)               # trailing silence that ends an utterance
+MIN_SP_MS = _env_int('CUE_STT_MIN_SPEECH_MS', 400)         # ignore voiced blips shorter than this
+PARTIAL_EVERY_S = _env_float('CUE_STT_PARTIAL_EVERY_S', 0.4)  # re-transcribe cadence while speech continues
+ENERGY_GATE = _env_float('CUE_STT_ENERGY_GATE', 0.010)     # RMS fallback gate if webrtcvad is unavailable
 
 # Known faster-whisper model sizes -> HuggingFace repo. `models_list` reports
 # these as candidates and flags which are already cached under download_root.
@@ -241,7 +258,9 @@ class Service:
         text = await self._whisper(to_float(pcm), language)
         return {"text": text}
 
-    async def _whisper(self, audio_float, language=None, beam_size=1):
+    async def _whisper(self, audio_float, language=None, beam_size=None):
+        if beam_size is None:
+            beam_size = _env_int('CUE_STT_BEAM_SIZE', 1)
         # Inference timing: faster-whisper.transcribe is the hot (CPU/GPU-bound) call.
         # Measured here, not in transcribe(), so every caller (batch + partial + final)
         # reports its own inference duration in the structured log.

@@ -162,3 +162,122 @@ test('memory.notes merges cleanly with a persisted notes value (deepMerge does n
   const s = store.getSettings();
   assert.equal(s.memory.notes, 'prefers terse answers; uses cue for interviews');
 });
+
+// ---- schema-driven configurable defaults ----
+
+test('schema-driven LLM settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.llm.maxTokens, 4096);
+  assert.equal(s.llm.idleTimeoutMs, 30000);
+});
+
+test('schema-driven memory settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.memory.minNewTurns, 10);
+  assert.equal(s.memory.summaryIntervalMs, 60000);
+  assert.equal(s.memory.maxSummaryChars, 2000);
+  assert.equal(s.memory.maxNotesChars, 4000);
+  // memory.notes should still exist from BASE_DEFAULTS
+  assert.equal(s.memory.notes, '');
+});
+
+test('schema-driven transcript settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.transcript.maxTurns, 200);
+});
+
+test('schema-driven skills settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.skills.maxChars, 8000);
+});
+
+test('schema-driven resume settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.resume.maxContextChars, 12000);
+  assert.equal(s.resume.maxSummaryChars, 1500);
+});
+
+test('schema-driven screen settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.screen.maxEdge, 1568);
+  assert.equal(s.screen.jpegQuality, 85);
+  assert.equal(s.screen.cacheTtlMs, 1500);
+});
+
+test('schema-driven STT tuning settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.stt.maxSpawnFailures, 3);
+  assert.equal(s.stt.helloTimeoutMs, 8000);
+  assert.equal(s.stt.callTimeoutMs, 15000);
+  assert.equal(s.stt.modelReloadTimeoutMs, 120000);
+  assert.equal(s.stt.shutdownGraceMs, 1000);
+  assert.equal(s.stt.modelDownloadTimeoutMs, 600000);
+  assert.equal(s.stt.modelLoadTimeoutMs, 120000);
+  assert.equal(s.stt.preSidBytes, 64000);
+  assert.equal(s.stt.streamMaxConnectFailures, 3);
+  assert.equal(s.stt.streamMaxBackoffMs, 8000);
+  assert.equal(s.stt.flushMs, 3500);
+  assert.equal(s.stt.minBytes, 9600);
+  assert.equal(s.stt.rmsGate, 240);
+  assert.equal(s.stt.transcribeTimeoutMs, 30000);
+});
+
+test('schema-driven Python settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.python.vadAggressiveness, 2);
+  assert.equal(s.python.endMs, 700);
+  assert.equal(s.python.minSpeechMs, 400);
+  assert.equal(s.python.partialEveryS, 0.4);
+  assert.equal(s.python.energyGate, 0.01);
+  assert.equal(s.python.beamSize, 1);
+  assert.equal(s.python.stderrTailBytes, 1024);
+});
+
+test('schema-driven UI settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.ui.zoomMin, 0.5);
+  assert.equal(s.ui.zoomMax, 3);
+  assert.equal(s.ui.zoomStep, 0.1);
+  assert.equal(s.ui.statusDurationMs, 11000);
+  assert.equal(s.ui.inputMaxHeight, 140);
+});
+
+test('schema-driven main settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.main.backoffBaseMs, 1000);
+  assert.equal(s.main.shortcutMaxLength, 80);
+});
+
+test('schema-driven shortcut settings have correct defaults', () => {
+  const s = store.getSettings();
+  assert.equal(s.shortcuts.leetcode, 'CommandOrControl+H');
+  assert.equal(s.shortcuts.quit, 'CommandOrControl+Shift+X');
+  assert.equal(s.shortcuts.immediateAssist, 'Control+Alt+A');
+  assert.equal(s.shortcuts.toggleOverlay, 'Control+Alt+C');
+  // Assist shortcut is already in BASE_DEFAULTS
+  assert.equal(s.shortcuts.assist, 'CommandOrControl+Return');
+});
+
+test('schema-driven pre-prompt template overrides default to empty (use built-in)', () => {
+  const s = store.getSettings();
+  const templates = s.promptOverrides && s.promptOverrides.prepromptTemplates;
+  assert.ok(templates, 'prepromptTemplates exists');
+  assert.equal(templates.concise, '', 'concise template default is empty');
+  assert.equal(templates.interview, '', 'interview template default is empty');
+  assert.equal(templates.engineer, '', 'engineer template default is empty');
+  assert.equal(templates.copilot, '', 'copilot template default is empty');
+});
+
+test('validation clamps out-of-range values on load', () => {
+  // Write a corrupt cue-data.json with out-of-range values
+  fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({
+    llm: { maxTokens: -1 },
+    ui: { zoomMin: 999 },
+  }));
+  delete require.cache[require.resolve('../src/store')];
+  stubElectron(tmpDir);
+  store = require('../src/store');
+  const s = store.getSettings();
+  assert.equal(s.llm.maxTokens, 256, 'clamped to min');
+  assert.equal(s.ui.zoomMin, 2.0, 'clamped to max');
+});

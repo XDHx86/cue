@@ -20,7 +20,7 @@ Permanent rules of this repo. Break one only with a deliberate decision logged i
   runs `electron .` directly; sources ship unpacked.
 - **No native modules by design** — avoids postinstall pain across macOS/Windows. If a
   feature tempts you to add one, first look for a dependency-free path (the
-  [src/env.js](../../src/env.js) hand-rolled `.env` loader is the precedent).
+  the config-schema.js approach (pure-JS schema, no deps) is the precedent).
 - `electron-builder` config uses **`asar: false`**; the `files` allowlist in
   [package.json](../../package.json) is `main.js`, `preload.js`, `src/**`, `renderer/**`,
   `python/**` (the managed STT service ships unpacked so the spawned process can read it).

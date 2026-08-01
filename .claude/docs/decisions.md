@@ -95,7 +95,7 @@ message, suggestion}`; `streamX` and `handleSttError` route through it.
 are consistent.
 **Alternatives rejected:** per-catch bespoke messages (the prior vague/broken state).
 
-## ADR-012 — `.env` is dependency-free — implemented
+## ADR-012 — `.env` is dependency-free — superseded by ADR-015
 **Decision:** `src/env.js` hand-rolls a `.env` parser; `CUE_*` env overrides are runtime-only,
 never persisted to `cue-data.json`.
 **Rationale:** consistency with ADR-003 (no deps); keeping secrets out of the persisted
@@ -145,16 +145,18 @@ structural defects, not timeout-tuning problems.
 giving up on the local engine (the whole point of ADR-013); dropping the batch path (cloud is the
 fallback when local is unavailable).
 
-## ADR-015 — Retire the `.env` system into the Store — decided (Phase 8)
+## ADR-015 — Retire the `.env` system into the Store — implemented
 **Decision:** remove `src/env.js` and the `CUE_*` runtime-override path; all config (incl. API
 secrets) already lives in the Store (`src/store.js` `apiKeys`). Reverses ADR-012's dependency-free
 `.env` precedent, so this ADR is the required logged decision per CLAUDE.md governance.
 **Rationale:** the `.env` system is no longer needed — the Store owns all settings, and the `CUE_*`
 env path is a redundant seeding layer. Removing it simplifies the boot path and one less config
-surface. A one-time import of an existing `userData/.env` seeds the Store on first boot post-change.
-**Status:** decided; implementation deferred to Phase 8 so P1/P2 don't add new `CUE_*` consumers
-that would have to be re-migrated. **Alternatives rejected:** keep `.env` as a pure convenience
-seeder (redundant with the Store; two config surfaces breeds drift).
+surface. Python service params (VAD, beam size) are passed via `buildPyLogEnv()` at spawn time
+from settings, preserving the env-var interface for the child process without a .env file.
+**Status:** implemented. `src/env.js` deleted; `loadDotenv()` removed from `main.js`; all
+`LEGACY_ENV_OVERRIDES` and `SCHEMA_ENV_MAP` removed from `store.js`; `.env.example` deleted;
+`env` fields removed from config-schema.js. **Alternatives rejected:** keep `.env` as a pure
+convenience seeder (redundant with the Store; two config surfaces breeds drift).
 
 ## ADR-017 — Shared provider descriptor shape, two registries (LLM + STT) — implemented (R1)
 **Decision:** one self-describing descriptor shape (`id, displayName, providerType, capabilities,

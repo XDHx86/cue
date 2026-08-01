@@ -49,8 +49,8 @@ function newTurnsSince(finals, watermark) {
   return (finals || []).filter((t) => (t.ts || 0) > wm);
 }
 
-function shouldSummarize(finals, watermark) {
-  return newTurnsSince(finals, watermark).length >= MIN_NEW_TURNS;
+function shouldSummarize(finals, watermark, minNewTurns) {
+  return newTurnsSince(finals, watermark).length >= (typeof minNewTurns === 'number' ? minNewTurns : MIN_NEW_TURNS);
 }
 
 // The compaction user message: lead with the existing running summary so the model EXTENDS it
@@ -76,12 +76,13 @@ function nextWatermark(finals, watermark) {
 // Merge a fresh batch summary into the rolling summary. The model is instructed to reply "(none)"
 // when nothing substantive — that is a no-op (the existing summary stands). Output is capped at
 // MAX_SUMMARY_CHARS so the memory section never grows unbounded across a long session.
-function appendSummary(existing, batchSummary) {
+function appendSummary(existing, batchSummary, maxChars) {
   const batch = (batchSummary || '').trim();
   if (!batch || batch === '(none)') return existing || '';
   const base = (existing || '').trim();
   const merged = base ? base + '\n\n' + batch : batch;
-  return merged.slice(0, MAX_SUMMARY_CHARS);
+  const cap = typeof maxChars === 'number' ? maxChars : MAX_SUMMARY_CHARS;
+  return merged.slice(0, cap);
 }
 
 // ---- runner: own latch, interval, persistence; all IO injected ----
@@ -92,19 +93,27 @@ function appendSummary(existing, batchSummary) {
 //   summarize({system,userMessage}) → Promise<string> LLM compaction call; injected so tests
 //                                     don't need electron or the SDK. main wires it to createLLM.
 //   filePath              → cue-memory.json path (null skips persistence entirely)
-//   intervalMs            → override the loop cadence (testing)
+//   getIntervalMs()       → override the loop cadence (testing). Lazy getter so
+//                           settings changes apply without restarting the runner.
 //   getSystemPrompt()     → the compaction system prompt; default () => MEMORY_SUMMARY_PROMPT.
 //                           main injects () => resolveField('memorySummaryPrompt', settings) so
 //                           the user's edit in Settings takes effect (ADR-014). Pure accessor →
 //                           tests stay electron/SDK-free and electron-free by default.
+//   getMinNewTurns()      → minimum new turns before compaction (lazy getter for live apply).
+//   getMaxSummaryChars()  → cap on rolling summary length (lazy getter for live apply).
 function createMemoryRunner(deps) {
   const getFinals = deps.getFinals || (() => []);
   const getWatermark = deps.getWatermark || (() => 0);
   const setWatermark = deps.setWatermark || function () {};
   const summarize = deps.summarize || (async () => '');
   const filePath = deps.filePath || null;
-  const intervalMs = typeof deps.intervalMs === 'number' ? deps.intervalMs : SUMMARY_INTERVAL_MS;
+  const getIntervalMs = typeof deps.getIntervalMs === 'function'
+    ? deps.getIntervalMs : () => (typeof deps.intervalMs === 'number' ? deps.intervalMs : SUMMARY_INTERVAL_MS);
   const getSystemPrompt = deps.getSystemPrompt || (() => MEMORY_SUMMARY_PROMPT);
+  const getMinNewTurns = typeof deps.getMinNewTurns === 'function'
+    ? deps.getMinNewTurns : () => (typeof deps.minNewTurns === 'number' ? deps.minNewTurns : MIN_NEW_TURNS);
+  const getMaxSummaryChars = typeof deps.getMaxSummaryChars === 'function'
+    ? deps.getMaxSummaryChars : () => (typeof deps.maxSummaryChars === 'number' ? deps.maxSummaryChars : MAX_SUMMARY_CHARS);
 
   let summary = '';
   let summarizing = false; // overlap guard — never touches state.busy
@@ -137,7 +146,7 @@ function createMemoryRunner(deps) {
   async function tick() {
     const finals = getFinals();
     const watermark = getWatermark();
-    if (!shouldSummarize(finals, watermark)) return false;
+    if (!shouldSummarize(finals, watermark, getMinNewTurns())) return false;
     if (summarizing) return false; // a slow compaction must not double-run or block
     summarizing = true;
     try {
@@ -153,7 +162,7 @@ function createMemoryRunner(deps) {
       }
       // A non-throwing completion (including "(none)") advances the watermark past these turns so
       // we never re-process them; the summary is the merged result (no-op when "(none)").
-      summary = appendSummary(summary, result);
+      summary = appendSummary(summary, result, getMaxSummaryChars());
       const wm = nextWatermark(finals, watermark);
       setWatermark(wm);
       persist();
@@ -165,11 +174,14 @@ function createMemoryRunner(deps) {
 
   function start() {
     if (timer) return;
-    timer = setInterval(() => { tick(); }, intervalMs);
-    if (typeof timer.unref === 'function') timer.unref(); // don't keep the process alive for compaction
+    function scheduleNext() {
+      timer = setTimeout(() => { tick(); scheduleNext(); }, getIntervalMs());
+      if (typeof timer.unref === 'function') timer.unref(); // don't keep the process alive for compaction
+    }
+    scheduleNext();
   }
   function stop() {
-    if (timer) { clearInterval(timer); timer = null; }
+    if (timer) { clearTimeout(timer); timer = null; }
   }
 
   function getSummary() { return summary; }

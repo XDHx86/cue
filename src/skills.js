@@ -77,15 +77,17 @@ function parseSkillFile(filename, text) {
   };
 }
 
-// Cap total body length at MAX_SKILLS_CHARS. Greedily include whole skills in sorted order; if a
-// skill would overflow, truncate its body to the remaining capacity rather than drop it (a single
-// large skill still surfaces something). Compose-system renders body, so body length is the proxy.
-function capSkills(skills) {
+// Cap total body length at maxChars (default MAX_SKILLS_CHARS). Greedily include whole skills in
+// sorted order; if a skill would overflow, truncate its body to the remaining capacity rather
+// than drop it (a single large skill still surfaces something). Compose-system renders body,
+// so body length is the proxy.
+function capSkills(skills, maxChars) {
+  const cap = typeof maxChars === 'number' ? maxChars : MAX_SKILLS_CHARS;
   let used = 0;
   const out = [];
   for (const s of skills) {
-    if (used >= MAX_SKILLS_CHARS) break;
-    const remaining = MAX_SKILLS_CHARS - used;
+    if (used >= cap) break;
+    const remaining = cap - used;
     const body = s.body.length > remaining ? s.body.slice(0, remaining) : s.body;
     out.push({ name: s.name, description: s.description, body });
     used += body.length;
@@ -96,7 +98,7 @@ function capSkills(skills) {
 // Read and parse every `.claude/skills/*.md` under skillsPath. Returns [] when the directory is
 // missing or unreadable. Skills with neither a body nor a description are skipped (nothing to
 // inject). Output is sorted by name for deterministic capping.
-function readSkills(skillsPath) {
+function readSkills(skillsPath, maxChars) {
   let files;
   try { files = fs.readdirSync(skillsPath); } catch { return []; }
   const parsed = [];
@@ -109,13 +111,14 @@ function readSkills(skillsPath) {
     parsed.push(skill);
   }
   parsed.sort((a, b) => a.name.localeCompare(b.name));
-  return capSkills(parsed);
+  return capSkills(parsed, maxChars);
 }
 
-// loadSkillDir(dir) reads dir/.claude/skills/*.md, returning [{name, description, body}] capped at
-// MAX_SKILLS_CHARS total body length. dir is a project root (the claude-code convention); a missing
-// or non-directory skills path is a silent no-op → []. Results are cached by directory mtime.
-function loadSkillDir(dir) {
+// loadSkillDir(dir, { maxChars }) reads dir/.claude/skills/*.md, returning
+// [{name, description, body}] capped at maxChars (default MAX_SKILLS_CHARS) total body length.
+// dir is a project root (the claude-code convention); a missing or non-directory skills path
+// is a silent no-op → []. Results are cached by directory mtime.
+function loadSkillDir(dir, { maxChars } = {}) {
   const skillsPath = path.join(dir || '', '.claude', 'skills');
   const abs = path.resolve(skillsPath);
   let stat;
@@ -124,7 +127,7 @@ function loadSkillDir(dir) {
   const mtimeMs = stat.mtimeMs;
   const cached = _cache.get(abs);
   if (cached && cached.mtimeMs === mtimeMs) return cached.skills;
-  const skills = readSkills(abs);
+  const skills = readSkills(abs, maxChars);
   _cache.set(abs, { mtimeMs, skills });
   return skills;
 }

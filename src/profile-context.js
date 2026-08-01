@@ -18,8 +18,15 @@ const MAX_RESUME_SUMMARY_CHARS = 1500; // matches the RESUME_SUMMARY_PROMPT dige
 // framing appendResumeContext has always emitted (tests pin those substrings); the summary branch
 // parallels it as a "career digest". Both keep the untrusted-data / do-not-invent disclaimers so
 // the section never reads as instructions to the model.
-function frameResumeSection(resume, { summary } = {}) {
-  const cap = summary ? MAX_RESUME_SUMMARY_CHARS : MAX_RESUME_CONTEXT_CHARS;
+function frameResumeSection(resume, { summary, settings } = {}) {
+  let cap;
+  if (summary) {
+    cap = (settings && settings.resume && typeof settings.resume.maxSummaryChars === 'number')
+      ? settings.resume.maxSummaryChars : MAX_RESUME_SUMMARY_CHARS;
+  } else {
+    cap = (settings && settings.resume && typeof settings.resume.maxContextChars === 'number')
+      ? settings.resume.maxContextChars : MAX_RESUME_CONTEXT_CHARS;
+  }
   const body = resume.slice(0, cap);
   if (summary) {
     return 'Use the following user-provided career digest as factual reference data when the request concerns the user\'s background, experience, qualifications, or career. ' +
@@ -44,10 +51,10 @@ function frameResumeSection(resume, { summary } = {}) {
  * @param {unknown} resumeContext The locally saved résumé text.
  * @returns {string} The prompt, optionally grounded in the supplied résumé.
  */
-function appendResumeContext(systemPrompt, resumeContext) {
+function appendResumeContext(systemPrompt, resumeContext, settings) {
   const resume = typeof resumeContext === 'string' ? resumeContext.trim() : '';
   if (!resume) return systemPrompt;
-  return systemPrompt + '\n\n' + frameResumeSection(resume, { summary: false });
+  return systemPrompt + '\n\n' + frameResumeSection(resume, { summary: false, settings });
 }
 
 /**
@@ -70,7 +77,7 @@ function composeResumeSection(def, settings) {
   const useSummary = !!def.small && !!digest;
   const body = useSummary ? digest : full;
   if (!body) return '';
-  return frameResumeSection(body, { summary: useSummary });
+  return frameResumeSection(body, { summary: useSummary, settings });
 }
 
 module.exports = {

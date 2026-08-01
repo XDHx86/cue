@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { PRE_PROMPT_TEMPLATES, DEFAULT_PRE_PROMPT_TEMPLATE } = require('../src/prompt-registry');
+const { PRE_PROMPT_TEMPLATES, DEFAULT_PRE_PROMPT_TEMPLATE, resolveField } = require('../src/prompt-registry');
 const { getPrePromptChoice, buildPrePromptOverride, BUILTINS } = require('../src/preprompt');
 
 // getPrePromptChoice positions the Assistant-style seg exactly as resolveField resolves it:
@@ -91,4 +91,54 @@ test('round-trip: getPrePromptChoice(buildPrePromptOverride(x)) reproduces x', (
     assert.deepEqual(getPrePromptChoice({ promptOverrides: { prePrompt: written } }), c.exp,
       'round-trip failed for ' + JSON.stringify(c.in));
   }
+});
+
+// ---- promptOverrides.prepromptTemplates: editing built-in template texts ----
+
+test('resolveField returns built-in default when no template override exists', () => {
+  const result = resolveField('prePrompt', {
+    promptOverrides: { prePrompt: { option: 'concise', text: '' } },
+  });
+  assert.equal(result, PRE_PROMPT_TEMPLATES.concise);
+});
+
+test('resolveField returns user-edited template text when promptOverrides.prepromptTemplates has one', () => {
+  const edited = 'Be extremely terse. One sentence max.';
+  const result = resolveField('prePrompt', {
+    promptOverrides: {
+      prePrompt: { option: 'concise', text: '' },
+      prepromptTemplates: { concise: edited },
+    },
+  });
+  assert.equal(result, edited);
+});
+
+test('resolveField still returns custom text when both custom and template override exist', () => {
+  const result = resolveField('prePrompt', {
+    promptOverrides: {
+      prePrompt: { option: 'custom', text: 'my custom lead' },
+      prepromptTemplates: { concise: 'edited concise' },
+    },
+  });
+  assert.equal(result, 'my custom lead', 'custom text wins over template override');
+});
+
+test('resolveField returns built-in default for non-edited templates', () => {
+  const result = resolveField('prePrompt', {
+    promptOverrides: {
+      prePrompt: { option: 'engineer', text: '' },
+      prepromptTemplates: { concise: 'edited concise' }, // only concise is edited
+    },
+  });
+  assert.equal(result, PRE_PROMPT_TEMPLATES.engineer, 'non-edited template returns built-in');
+});
+
+test('resolveField returns empty for empty template override (falls through to built-in)', () => {
+  const result = resolveField('prePrompt', {
+    promptOverrides: {
+      prePrompt: { option: 'copilot', text: '' },
+      prepromptTemplates: { copilot: '  ' }, // whitespace-only = empty
+    },
+  });
+  assert.equal(result, PRE_PROMPT_TEMPLATES.copilot, 'whitespace-only override falls through');
 });

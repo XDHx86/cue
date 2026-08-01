@@ -29,7 +29,7 @@ function label(id) {
 function makeOpenAICompatEngine({ id, settings, baseURL, apiKey }) {
   const model = ((settings.models || {})[id] || {})[settings.smart ? 'smart' : 'fast'];
   const ready = id === 'ollama' ? !!model : (!!apiKey && !!model);
-  const maxTokens = 4096;
+  const maxTokens = (settings.llm && settings.llm.maxTokens) || 4096;
   return {
     provider: id,
     model,

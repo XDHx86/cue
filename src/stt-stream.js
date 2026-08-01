@@ -222,7 +222,7 @@ class WsClient {
 // exponential backoff; after 3 consecutive failures it latches and reports inactive so the
 // capture pipeline can degrade that channel to the batch STT path.
 class FasterWhisperStreamSession {
-  constructor({ url, language, onFinal, onPartial, onError, onStatus, log }) {
+  constructor({ url, language, onFinal, onPartial, onError, onStatus, log, maxConnectFailures, maxBackoffMs }) {
     this.url = url;
     this.language = language === undefined ? null : language;
     this.onFinal = onFinal; this.onPartial = onPartial; this.onError = onError; this.onStatus = onStatus;
@@ -231,6 +231,8 @@ class FasterWhisperStreamSession {
     this.failCount = 0;
     this.userClosed = false;
     this.backoffTimer = null;
+    this.maxConnectFailures = typeof maxConnectFailures === 'number' ? maxConnectFailures : 3;
+    this.maxBackoffMs = typeof maxBackoffMs === 'number' ? maxBackoffMs : 8000;
   }
 
   start() {
@@ -274,13 +276,13 @@ class FasterWhisperStreamSession {
   _onClose() {
     if (this.userClosed) return;
     this.failCount++;
-    if (this.failCount >= 3) {
+    if (this.failCount >= this.maxConnectFailures) {
       this.log.error({ attempts: this.failCount },
                      'stream session gave up after repeated connect failures; degrading to batch');
-      if (this.onStatus) this.onStatus({ active: false, reason: 'faster-whisper unreachable after 3 attempts' });
+      if (this.onStatus) this.onStatus({ active: false, reason: 'faster-whisper unreachable after ' + this.maxConnectFailures + ' attempts' });
       return; // latch: stop reconnecting; main degrades this channel to batch
     }
-    const delay = Math.min(1000 * Math.pow(2, this.failCount - 1), 8000);
+    const delay = Math.min(1000 * Math.pow(2, this.failCount - 1), this.maxBackoffMs);
     this.log.warn({ attempts: this.failCount, delay }, 'stream session closed; reconnecting');
     this.backoffTimer = setTimeout(() => { this.backoffTimer = null; this.start(); }, delay);
   }
@@ -342,6 +344,8 @@ function createStreamSTT(settings, { localEngineManager, logger } = {}) {
           url: settings.stt.fasterWhisperURL,
           language,
           onFinal, onPartial, onError, onStatus, log,
+          maxConnectFailures: settings.stt && settings.stt.streamMaxConnectFailures,
+          maxBackoffMs: settings.stt && settings.stt.streamMaxBackoffMs,
         });
       }
       return null; // batch/deepgram have no streaming session here

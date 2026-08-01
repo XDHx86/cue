@@ -40,7 +40,7 @@ let _cache = null; // { dataUrl, at } — last capture; null until the first suc
 
 function clearCache() { _cache = null; }
 
-async function captureScreenshot({ ttlMs = CACHE_TTL_MS } = {}) {
+async function captureScreenshot({ ttlMs = CACHE_TTL_MS, maxEdge = MAX_EDGE, quality = JPEG_QUALITY } = {}) {
   const now = Date.now();
   if (_cache && cacheFresh(now, _cache.at, ttlMs)) return _cache.dataUrl;
 
@@ -60,10 +60,10 @@ async function captureScreenshot({ ttlMs = CACHE_TTL_MS } = {}) {
   // Downscale to ≤MAX_EDGE on the longest side, preserving aspect ratio (no upscale). The OS may
   // already have capped the thumbnail below native; getSize() reads the actual buffer dims.
   const { width: iw, height: ih } = img.getSize();
-  const { width: tw, height: th } = scaleToMaxEdge(iw, ih, MAX_EDGE);
+  const { width: tw, height: th } = scaleToMaxEdge(iw, ih, maxEdge);
   const resized = (tw !== iw) ? img.resize({ width: tw, height: th, quality: 'good' }) : img;
 
-  const dataUrl = 'data:image/jpeg;base64,' + resized.toJPEG(JPEG_QUALITY).toString('base64');
+  const dataUrl = 'data:image/jpeg;base64,' + resized.toJPEG(quality).toString('base64');
   _cache = { dataUrl, at: now };
   return dataUrl;
 }

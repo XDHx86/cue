@@ -63,18 +63,21 @@ async function transcribeGemini(apiKey, wav) {
 async function transcribeFasterWhisperLocal(manager, settings, wav, log) {
   if (!(await manager.ensureRunning())) throw new Error('STT service not running');
   const params = localLoadParams(settings, manager, null); // null language → matches streaming's lastLoad
+  const sttCfg = (settings && settings.stt) || {};
+  const loadTimeout = sttCfg.modelLoadTimeoutMs || MODEL_LOAD_TIMEOUT_MS;
+  const transcribeTimeout = sttCfg.transcribeTimeoutMs || LOCAL_TRANSCRIBE_TIMEOUT_MS;
   const last = manager.getLastLoad();
   if (!last || JSON.stringify(last) !== JSON.stringify(params)) {
     log.debug({ model: params.name, device: params.device, compute_type: params.compute_type },
       'STT rpc → load (cache only; model not loaded)');
-    await manager.call('load', params, { timeout: MODEL_LOAD_TIMEOUT_MS });
+    await manager.call('load', params, { timeout: loadTimeout });
     manager.setLastLoad(params);
     log.debug({ model: params.name }, 'STT rpc ← load');
   }
   log.debug({ method: 'transcribe', bytes: wav.length, model: params.name }, 'STT rpc → transcribe');
   const t0 = Date.now();
   const res = await manager.call('transcribe', { wav_b64: wav.toString('base64'), language: params.language },
-    { timeout: LOCAL_TRANSCRIBE_TIMEOUT_MS });
+    { timeout: transcribeTimeout });
   const text = ((res && typeof res.text === 'string') ? res.text : '').trim();
   log.debug({ method: 'transcribe', elapsedMs: Date.now() - t0, chars: text.length }, 'STT rpc ← transcribe');
   return text;

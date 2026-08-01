@@ -9,15 +9,21 @@
 const TR_MAX_TURNS = 200;
 
 const transcriptState = {
-  finals: [],                         // { channel, text, ts }[] — ring, oldest evicted beyond TR_MAX_TURNS
+  finals: [],                         // { channel, text, ts }[] — ring, oldest evicted beyond maxTurns
   partials: { you: '', them: '' },    // live streaming partial per channel (updated by STT onPartial)
   lastSummarizedTs: 0,               // rolling-summary watermark (advanced by memory.js)
+  maxTurns: TR_MAX_TURNS,            // configurable via settings (set by main.js on startup)
 };
+
+// Configure transcript ring-buffer limits. Called by main.js on startup from settings.
+function setTranscriptConfig({ maxTurns } = {}) {
+  if (typeof maxTurns === 'number' && maxTurns > 0) transcriptState.maxTurns = maxTurns;
+}
 
 // Append a finalized turn, evicting the oldest once the ring is full. Returns the turn.
 function pushFinal(turn) {
   transcriptState.finals.push(turn);
-  if (transcriptState.finals.length > TR_MAX_TURNS) transcriptState.finals.shift();
+  if (transcriptState.finals.length > transcriptState.maxTurns) transcriptState.finals.shift();
   return turn;
 }
 
@@ -48,5 +54,6 @@ module.exports = {
   pushFinal,
   setPartial, clearPartial, getPartial,
   getFinals, liveTranscriptForPrompt,
+  setTranscriptConfig,
   reset,
 };
