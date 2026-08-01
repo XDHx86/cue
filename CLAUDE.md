@@ -80,9 +80,11 @@ locally. Details at [docs/release.md](docs/release.md).
 
 ## Coding & debugging notes
 
-- **Debug logging** — `const DEBUG = false` at the top of [main.js](main.js#L1) and
-  [src/llm.js](src/llm.js#L1). Flip to `true` for traces; **don't commit it true**. `CUE_ENV_DEBUG=1`
-  for the `.env` loader.
+- **Debug logging** — `const DEBUG = false` at the top of [main.js](main.js#L1). Flip to `true`
+  for traces; **don't commit it true**. `CUE_ENV_DEBUG=1` for the `.env` loader. (LLM traces flow
+  through the lazy `child('llm')` Pino logger in [src/providers/llm/shared.js](src/providers/llm/shared.js),
+  debug-level and silent at the default info level — the `src/llm.js` `DEBUG` flag is retired; it's
+  now a thin registry delegate.)
 - **Model names drift** — defaults in [src/store.js](src/store.js) (`gpt-4o`, `claude-3-5-sonnet-latest`,
   …) are user-editable and change fast — treat them as defaults, not constraints.
 - **`process.platform` branches** are scattered (window flags, onboarding, shortcut keycaps, the

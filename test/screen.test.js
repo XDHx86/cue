@@ -48,9 +48,11 @@ test('scaleToMaxEdge respects a custom maxEdge, not just the module constant', (
   assert.deepEqual(scaleToMaxEdge(4000, 2000, 1000), { width: 1000, height: 500 });
 });
 
-test('MAX_EDGE / JPEG_QUALITY / CACHE_TTL_MS match the plan (1568 / 0.85 / 1500)', () => {
+test('MAX_EDGE / JPEG_QUALITY / CACHE_TTL_MS match the plan (1568 / 85 / 1500)', () => {
+  // JPEG_QUALITY is Electron nativeImage.toJPEG's integer quality factor (0–100),
+  // not a 0–1 ratio — 85 is "visually clean for screen text at KB, not MB" (src/screen.js).
   assert.equal(MAX_EDGE, 1568);
-  assert.equal(JPEG_QUALITY, 0.85);
+  assert.equal(JPEG_QUALITY, 85);
   assert.equal(CACHE_TTL_MS, 1500);
 });
 

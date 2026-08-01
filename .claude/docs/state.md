@@ -16,40 +16,60 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 *next*; it is not a transcript.
 
 ## Branch
-- `fix/stt-transcription-timeout` (off `main`). An 8-priority overhaul at
-  [`../plans/cue-fix-plan.md`](../plans/cue-fix-plan.md). **P1–P2 committed**; **P3 in flight**.
+- `feat/registry-refactor` (off `main`). An 8-phase registry-driven refactor at
+  [`C:\Users\karee\.claude\plans\curried-toasting-badger.md`](../../../Users/karee/.claude/plans/curried-toasting-badger.md)
+  (also tracked in [HANDOFF.md](HANDOFF.md)). **R1a + R1b + R1c complete** (uncommitted);
+  R2 next. Live progress + plan detail live in HANDOFF.md — this file is the short resume.
 
-## Completed (committed)
-- **P1 — transcription root-cause fixes** (`be96ab6`): decouple model download from load (download
-  first with progress → cache-only load, finite 120s timeout); pre-sid bounded PCM ring; mid-capture
-  channel degradation to batch in-session; 30s batch/cloud transcribe watchdog releasing the channel
-  lock; actionable provider-specific error surfacing; auto-prepare the venv on first capture for
-  `provider:'local'`; `scripts/stt-test-providers.js` (+ `npm run stt:test-providers`). ADR-014/ADR-016.
-- **P2 — generalized logging** (`b46163b` → `a96f256` → `bc1e89a`): Pino (Node) + Loguru (Python)
-  centralized, app-wide singleton; migrated the ~39 `console.*` in main/llm to the structured logger
-  (terminal fd 2 + dated rotating files). No stray `console.log` outside intentional transport fallbacks.
+## Completed (uncommitted, this branch)
+- **R1a — registry foundation.** [src/registry.js](../../src/registry.js) (`defineProvider`/
+  `listProviders`/`getProvider`/`renderSafe`/`resolveSupportedModels`, `${type}:${id}` namespacing),
+  [src/registry-loader.js](../../src/registry-loader.js) (folder discovery, param-injected),
+  [test/registry.test.js](../../test/registry.test.js) (11 tests).
+- **R1b — LLM providers into folders.** 5 self-describing descriptors under
+  `src/providers/llm/<id>/index.js` (openai, anthropic, gemini, nvidia, ollama), each calling
+  `defineProvider`. Shared: [src/providers/llm/openai-compat.js](../../src/providers/llm/openai-compat.js)
+  (one OpenAI-compatible streaming path for openai/nvidia/ollama; diverges only by `baseURL` +
+  the ollama sentinel) and [src/providers/llm/shared.js](../../src/providers/llm/shared.js) (lazy
+  `child('llm')` logger guard + `stripDataUrl`, kept BELOW llm.js in the require graph to avoid a
+  cycle). Anthropic/gemini ports are verbatim from the old `streamX` functions.
+  [test/providers.test.js](../../test/providers.test.js) asserts the 5 register + that folding
+  their `defaultSettings` reproduces today's literal DEFAULTS exactly.
+- **R1c — createLLM + store fold.** [src/llm.js](../../src/llm.js) is now a thin
+  `getProvider('llm', settings.provider).createEngine({settings})` delegate (the `if/else` switch
+  + `streamX` functions deleted). [src/store.js](../../src/store.js) folds every registered LLM
+  provider's `defaultSettings` into DEFAULTS at load (`foldLlmDefaults` + `BASE_DEFAULTS`) — the
+  provider descriptors are now the single source for `apiKeys`/`models`/`ollama` defaults.
+  `main.js` calls `loadProviders()` at startup (idempotent; store already triggers it at require).
+  **238/238 tests pass.**
 
-## In flight (uncommitted)
-- **P3 — Settings redesign as categorized tabs.** Rebuilt the single scrolling panel into a left-nav
-  tabbed shell — **Providers · Transcription · Models · Context · Shortcuts** — preserving every field
-  and the `fillSettings`/`saveSettings` contract (only the container/navigation changes; entry points
-  stable). Also fixes a latent storage-coherence bug: the Assistant-style seg was reading the deleted
-  legacy `settings.prePrompt`/`prePromptTemplate` keys, so it always showed "Concise" on reopen; it now
-  reads/writes the live `settings.promptOverrides.prePrompt` home via a new electron-free
-  [src/preprompt.js](../../src/preprompt.js) (`getPrePromptChoice`/`buildPrePromptOverride`, tested in
-  `test/preprompt.test.js`, exposed to the renderer as synchronous preload contextBridge pass-throughs —
-  not new IPC). **217/217 tests pass.** Docs refresh below is part of the commit.
+## In flight
+- Nothing mid-edit; the tree is a clean, tested R1b+R1c slice ready to commit (atomic: one
+  `feat(registry): R1b+R1c migrate LLM providers to a folder registry` commit, or two if reviewing
+  wants the split — R1b folders/tests then R1c llm/store delegation).
 
 ## Next
-1. **Commit P3** (`feat(ui): categorized settings tabs`) — `npm test` already green; manual UI check
-   (the user, not headless).
-2. **P4** — Mute/Unmute recording control reflecting real capture/STT state (depends on P1).
-3. Then P5 (screen perms), P6 (notifications), P7 (CI/build/Docker), P8 (retire .env + ADR-015).
+1. **R2 — STT provider registry.** Migrate STT providers (faster-whisper local, openai Whisper,
+   gemini, external-ws) into `src/providers/stt/<id>/index.js`; `createSTT` builds the batch chain
+   from `listProviders({type:'stt'})`; `stt-stream.js` resolves stream sessions via
+   `createStreamSession`; fold `stt-engine.js`'s `registerEngine`/`engineMeta` into the provider
+   registry. Port, don't fix, the local/offline bug (§9). See HANDOFF R2.
+2. Then R3 (auto-generated Settings UI), R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging),
+   R8 (docs compression).
 
 ## Blockers / open questions
-- P3's "every field reachable, seg reflects saved choice" needs the user's machine (headless Electron
-  can't open the panel); tests cover only the extracted helper. The manual checklist is in the plan.
+- Manual UI reachability check for R3/R5/R6/R7 needs the user's machine (headless Electron can't
+  open the panel). Not blocking R2 (uncoupled).
+- `apiKeys.deepgram` is an STT key seeded as a literal in `store.js BASE_DEFAULTS` until R2 wires a
+  deepgram STT provider to contribute it (matches ADR-002 — STT defaults live in store today).
 
 ## Session discoveries
-- (Promoted to [memory.md](memory.md) at commit — the preload-contextBridge-pass-through precedent and
-  the not-wired `prompts:registry` note.)
+- Real provider modules + `_resetProviders()`-between-cases are incompatible: Node caches a
+  required module by path, so the top-level `defineProvider()` never re-runs on re-require —
+  resetting the registry mid-suite leaves it empty for every later case. Real-provider tests load
+  ONCE at module scope (per-file worker isolation protects other suites). Recorded in
+  [memory.md](memory.md).
+- `logger.js` is require-safe: it imports `pino` at load but the worker transport only spawns at
+  `getLogger()` time, so requiring it (and thus provider→shared→logger) in the store-load path
+  pulls no transport and no Electron. (Promote to conventions if another store-load dep tempts a
+  transport-spawning require.)

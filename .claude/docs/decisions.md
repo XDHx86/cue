@@ -43,10 +43,13 @@ mode prompt.
 **Alternatives rejected:** a single transcript stream with channel prefixes.
 
 ## ADR-005 — Nvidia & Ollama reuse the OpenAI SDK via `baseURL` — implemented
-**Decision:** `streamOpenAI` is reused for nvidia and ollama by swapping `baseURL`; the OpenAI
-SDK constructor needs non-empty `apiKey`, so Ollama uses a sentinel `'ollama'`; the `ready`
-check bypasses the key for `ollama`.
+**Decision:** one OpenAI-compatible streaming path serves openai/nvidia/ollama, diverging only by
+`baseURL`; the OpenAI SDK constructor needs non-empty `apiKey`, so Ollama uses a sentinel `'ollama'`;
+the `ready` check bypasses the key for `ollama`.
 **Rationale:** avoids per-provider SDKs for OpenAI-compatible gateways; one code path.
+**Home:** the shared path is [src/providers/llm/openai-compat.js](../../src/providers/llm/openai-compat.js)
+`makeOpenAICompatEngine` (was `streamOpenAI` in the old `src/llm.js` switch; moved by ADR-017). The
+sentinel + `ready` gate survive verbatim.
 **Alternatives rejected:** per-provider SDKs; treating the sentinel as a real key.
 
 ## ADR-006 — faster-whisper runs as a local WebSocket streaming server — implemented
@@ -152,3 +155,23 @@ surface. A one-time import of an existing `userData/.env` seeds the Store on fir
 **Status:** decided; implementation deferred to Phase 8 so P1/P2 don't add new `CUE_*` consumers
 that would have to be re-migrated. **Alternatives rejected:** keep `.env` as a pure convenience
 seeder (redundant with the Store; two config surfaces breeds drift).
+
+## ADR-017 — Shared provider descriptor shape, two registries (LLM + STT) — implemented (R1)
+**Decision:** one self-describing descriptor shape (`id, displayName, providerType, capabilities,
+supportedModels, configurableSettings, defaultSettings, order, createEngine` + optional
+`createStreamSession` for STT), registered by type into TWO buckets (`'llm'` | `'stt'`) keyed
+`${type}:${id}`. Adding a provider = one folder under `src/providers/<type>/<id>/index.js` calling
+`defineProvider`, loaded by folder discovery (`src/registry-loader.js`). `createLLM`/Settings
+read the registry; no provider switch, no DEFAULTS fan-out (store folds `defaultSettings`), no
+Settings-UI edits (R3 auto-builds from `configurableSettings`).
+**Rationale:** preserves ADR-002 (LLM/STT decoupled — same shape, never-merged runtime paths) while
+removing the per-provider `if/else` switches and fan-out that made "add a provider" touch 6 files.
+`createEngine` lazy-requires its SDK so store folds defaults without pulling network SDKs, keeping
+tests electron- and dep-free (ADR-003). `renderSafe` strips functions so descriptors cross IPC for
+the Settings UI. Two buckets over one merged registry: the merged "future-proof" option would braid
+deliberately-decoupled paths and risk the working LLM/image flow.
+**Alternatives rejected:** one unified registry (merges decoupled domains — the ADR-002 risk); an
+STT-only plugin model (leaves the LLM switch in place); a JSON manifest without `createEngine` in
+the descriptor (the engine belongs with the metadata it describes).
+**Status:** implemented for LLM (R1a spine, R1b 5 providers, R1c `createLLM`+store delegation).
+STT migration (R2) uses the same shape — `createStreamSession` is already in the validator.

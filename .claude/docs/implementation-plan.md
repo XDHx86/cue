@@ -99,9 +99,10 @@ navigate by symbol, not by line, lines drift with commits):
   IPC handlers, `setDisplayMediaRequestHandler` (returns `sources[0]` — the Phase-0b fix picks
   the primary display source instead), the Windows `setAlwaysOnTop` level (Phase-0b raised to
   `'screen-saver',1`).
-- **LLM** — [src/llm.js](../../src/llm.js) provider switch (nvidia = `streamOpenAI` + `baseURL`
-  — the clone pattern reused by Ollama), all `streamX` re-throw through `normalizeSDKError`
-  (Phase-6), `maxTokens=4096` pinned, `stripDataUrl`.
+- **LLM** — [src/llm.js](../../src/llm.js) is a thin `getProvider('llm', id).createEngine`
+  delegate (ADR-017, R1). The 5 providers live in `src/providers/llm/<id>/index.js`; openai/nvidia/
+  ollama share `src/providers/llm/openai-compat.js`. All engines re-throw through `normalizeSDKError`
+  (Phase-6), `maxTokens=4096` pinned (Anthropic), `stripDataUrl` in `src/providers/llm/shared.js`.
 - **STT** — [src/stt.js](../../src/stt.js) chain by `apiKeys` presence; no early-exit on error;
   no "local" concept yet.
 - **Resume** — [src/profile-context.js](../../src/profile-context.js) `appendResumeContext`

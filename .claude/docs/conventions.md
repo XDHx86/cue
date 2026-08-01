@@ -35,8 +35,11 @@ is untested.
 
 ## Debug logging — flip local, never commit
 
-`const DEBUG = false` at the top of [main.js](../../main.js#L1) and [src/llm.js](../../src/llm.js#L1).
-Flip to `true` for verbose capture/LLM traces; **don't commit it true**.
+`const DEBUG = false` at the top of [main.js](../../main.js#L1). Flip to `true` for verbose
+capture/LLM traces; **don't commit it true**. (LLM traces now flow through the lazy `child('llm')`
+Pino logger in [src/providers/llm/shared.js](../../src/providers/llm/shared.js), debug-level and
+silent at the default info level — the equivalent of the old `DEBUG = false`. `src/llm.js` no longer
+holds a `DEBUG` flag; it's a thin registry delegate.)
 
 ## Audio & capture invariants
 

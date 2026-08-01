@@ -7,6 +7,12 @@ const { loadDotenv } = require('./src/env');
 // .env exists; shell-set vars always win.
 loadDotenv();
 const store = require('./src/store');
+// Load provider descriptors into the registry (R1c). Requiring src/store already triggers
+// loadProviders() at store's module load (so DEFAULTS can fold provider defaultSettings), so this
+// call is an idempotent no-op that documents the startup contract: providers are registered before
+// any createLLM/createSTT runs. Safe to call twice (Node caches provider modules by path).
+const { loadProviders } = require('./src/registry-loader');
+loadProviders({ _require: require });
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { createStreamSTT } = require('./src/stt-stream');

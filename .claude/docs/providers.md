@@ -11,32 +11,43 @@
 
 # providers — per-provider implementation notes
 
-How each LLM/STT provider is wired. Canonical provider detail lives here; see
-[src/llm.js](../../src/llm.js) and [src/stt.js](../../src/stt.js) for code.
+How each LLM/STT provider is wired. LLM providers are registry-driven (ADR-017): each lives in
+its own folder under [src/providers/llm/](../../src/providers/llm/) and self-describes. STT remains
+on the legacy `src/stt.js` chain until R2. See [decisions.md](decisions.md) for rationale.
 
-## LLM — `createLLM(settings)` interface
+## LLM — registry-driven (ADR-017)
 
-One `{ stream({ system, turns, imageDataUrl, onToken }) }` over:
+Each provider folder `src/providers/llm/<id>/index.js` calls `defineProvider`, declaring
+`capabilities`, `supportedModels`, `configurableSettings`, `defaultSettings` (folded into
+[src/store.js](../../src/store.js) DEFAULTS automatically), and `createEngine({settings})` which
+returns `{ provider, model, apiKey, ready, stream({system,turns,imageDataUrl,onToken}) }`.
+[src/llm.js](../../src/llm.js) `createLLM` is now a one-line delegate:
+`getProvider('llm', settings.provider).createEngine({settings})`.
 
-| Provider | SDK | Notes |
+| Provider | Folder | SDK / Notes |
 |---|---|---|
-| openai | `openai` | `streamOpenAI`. Image attached to last user turn as `data:image/...;base64,…` (`stripDataUrl` passes the mime through, [llm.js:5](../../src/llm.js#L5)). |
-| anthropic | `@anthropic-ai/sdk` | `streamAnthropic`. **Requires `maxTokens`** → pinned 4096 (effectively unlimited). |
-| gemini | `@google/genai` | `streamGemini`. |
-| nvidia | `openai` + `baseURL: https://integrate.api.nvidia.com/v1` | `streamOpenAI` reused (ADR-005). |
-| ollama | `openai` + `baseURL: settings.ollama.baseURL \|\| http://localhost:11434/v1` | `streamOpenAI` reused. **Sentinel `apiKey: 'ollama'`** — SDK constructor needs non-empty; Ollama ignores it. **Ready check bypasses the key** (`provider === 'ollama' ? !!model : (!!apiKey && !!model)`) so the dummy key doesn't block readiness. (ADR-005) |
+| openai | [llm/openai/](../../src/providers/llm/openai/index.js) | `openai`. Image → `image_url` with the full data URL (no mime split). |
+| anthropic | [llm/anthropic/](../../src/providers/llm/anthropic/index.js) | `@anthropic-ai/sdk`. **Requires `maxTokens`** → pinned 4096. Image via `source:{type:'base64',media_type,data}` (`stripDataUrl`). |
+| gemini | [llm/gemini/](../../src/providers/llm/gemini/index.js) | `@google/genai`. `generateContentStream`; image via `inlineData` (`stripDataUrl`); role remap `assistant`→`model`. |
+| nvidia | [llm/nvidia/](../../src/providers/llm/nvidia/index.js) | `openai` + fixed `baseURL: https://integrate.api.nvidia.com/v1` (ADR-005). Shares [openai-compat.js](../../src/providers/llm/openai-compat.js). |
+| ollama | [llm/ollama/](../../src/providers/llm/ollama/index.js) | `openai` + local `baseURL: settings.ollama.baseURL \|\| http://localhost:11434/v1`. **Sentinel `apiKey: 'ollama'`** (SDK needs non-empty; Ollama ignores) and **ready = `!!model` only** — the shared engine's `id==='ollama'` branch bypasses the key gate (ADR-005). |
 
-Adding a provider = DEFAULTS `apiKeys` + `models` entry + a `streamX`/baseURL branch + a
-`ready` rule + store auto-switch + renderer Settings UI + `statusText`. The Ollama case is
-the working template for "OpenAI-compatible gateway with no real key."
+**Adding a provider = one folder calling `defineProvider`.** No `src/llm.js` switch edit, no
+`DEFAULTS` slice, no Settings-UI edit (R3 auto-builds from `configurableSettings`); `defaultSettings`
+folds into the store automatically. OpenAI-compatible gateways share
+[openai-compat.js](../../src/providers/llm/openai-compat.js) (the Ollama template for "no real key").
+Shared helpers (lazy `child('llm')` logger guard + `stripDataUrl`) live in
+[src/providers/llm/shared.js](../../src/providers/llm/shared.js), kept BELOW `src/llm.js` in the
+require graph so providers never pull llm.js (cycle avoidance). Provider modules lazy-require their
+SDK **inside** `createEngine` so loading the registry pulls no network SDK.
 
 ## Image/screenshot attachment differs per provider
 
-Each `streamX` attaches the optional screenshot to the **last user turn** differently
-(JSON field, content part, or inline data). `stripDataUrl` keeps the mime so all three
-attach correctly. The current full-res PNG path is a known slow spot (Phase-5 vision
-improvement: JPEG + longest-edge cap + 1.5 s TTL cache — see
-[implementation-plan.md](implementation-plan.md)).
+Each provider's `createEngine` attaches the optional screenshot to the **last user turn**
+differently (JSON field, content part, or inline data). `stripDataUrl` (in
+[src/providers/llm/shared.js](../../src/providers/llm/shared.js)) keeps the mime so all three
+attach correctly. Screenshots are JPEG-capped to a 1568-px longest edge with a 1.5 s TTL cache
+([src/screen.js](../../src/screen.js), Phase-5 vision).
 
 ## STT — `createSTT(settings)` (decoupled, ADR-002)
 

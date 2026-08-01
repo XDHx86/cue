@@ -62,3 +62,11 @@ rule — it lives there now.
 - Tests must not `require('electron')` — electron-dependent bits are param-injected (see
   `src/profile-context.js` and the existing `test/` files). Adding an electron import in a
   tested module silently breaks `npm test`.
+- **Real provider modules + `_resetProviders()`-between-cases don't mix.** `test/registry.test.js`
+  registers throwaway *stub* fixtures per case and resets the map between them — fine. But a test
+  that loads the *real* `src/providers/**` tree by `require()` can only run that load's
+  `defineProvider()` side effect ONCE: Node caches the module by path, so a re-require is a no-op.
+  Resetting the registry mid-suite therefore leaves it empty for every case after the first.
+  Real-provider tests call `loadProviders()` once at module scope and never reset — per-file
+  worker isolation keeps them from leaking into other suites. (`test/providers.test.js` is the
+  precedent.)

@@ -5,10 +5,25 @@ const { app } = require('electron');
 // Default assistant-style option id (src/prompt-registry.js owns the templates now); needed here
 // only for the one-time legacy prePrompt migration fallback. The registry is the live source.
 const { DEFAULT_PRE_PROMPT_TEMPLATE } = require('./prompt-registry');
+// Provider registry (R1c). LLM providers self-describe their defaultSettings (apiKeys slots, model
+// tiers, ollama baseURL); folding them into DEFAULTS makes the providers the ONE source for those
+// defaults — no per-provider fan-out here. loadProviders() is pure at load time (provider modules
+// lazy-require their network SDK INSIDE createEngine, and the logger spawns no transport on
+// require), so calling it while building DEFAULTS pulls no SDK and no Electron. STT providers
+// aren't registered yet (no src/providers/stt tree — R2), so only LLM defaults fold in; the STT-
+// owned apiKeys.deepgram seed stays a literal here until R2's deepgram provider contributes it.
+const registry = require('./registry');
+const { loadProviders } = require('./registry-loader');
+loadProviders({ _require: require });
 
 const FILE = path.join(app.getPath('userData'), 'cue-data.json');
 
-const DEFAULTS = {
+// BASE_DEFAULTS holds the non-provider-owned skeleton: top-level toggles, shortcuts, skills,
+// memory, the STT block, and the STT-owned deepgram apiKeys seed. The LLM providers' apiKeys/
+// models/ollama defaults are folded in AFTER this literal (see foldLlmDefaults below) so the
+// provider descriptors are the single source for those. `deepMerge` is defined further down but
+// is a function declaration (hoisted), so the fold call below can reference it.
+const BASE_DEFAULTS = {
   provider: 'openai',
   smart: false,
   resumeContext: '',
@@ -32,18 +47,16 @@ const DEFAULTS = {
   shortcuts: { assist: 'CommandOrControl+Return' },
   // ollama's key is a non-empty sentinel ('ollama'), NOT a real key: the OpenAI SDK constructor
   // requires a non-empty apiKey, Ollama ignores it, and a non-empty value stops the auto-switch
-  // below from flipping away from a user-selected ollama just because the key isn't "real".
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '', ollama: 'ollama' },
-  models: {
-    openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
-    anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
-    gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
-    nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' },
-    ollama: { fast: 'llama3.2', smart: 'llama3.3' }
-  },
+  // below from flipping away from a user-selected ollama just because the key isn't "real". The
+  // LLM provider descriptors (src/providers/llm/*/index.js) contribute every apiKeys/models slot
+  // for the 5 LLM providers via foldLlmDefaults() below; deepgram is an STT key (R2 wires it) and
+  // stays a literal seed here so ENV override CUE_DEEPGRAM_API_KEY has a node to land on today.
+  apiKeys: { deepgram: '' },
+  models: {},
   // Ollama base URL — `ollama serve` exposes an OpenAI-compatible /v1 endpoint. Empty falls
-  // back to http://localhost:11434/v1 in llm.js. Set via Settings or CUE_OLLAMA_BASE_URL.
-  ollama: { baseURL: '' },
+  // back to http://localhost:11434/v1 in the ollama provider. Set via Settings or
+  // CUE_OLLAMA_BASE_URL. Folded in by the ollama provider's defaultSettings below.
+  ollama: {},
   // Speech-to-text streaming/lifecycle config. `provider` is the TRANSPORT selector:
   //   'auto' (prefer the managed local engine when ready, else the external WS server if a
   //   URL is set, else batch), 'local' (force the managed Python engine), 'faster-whisper'
@@ -72,7 +85,7 @@ const DEFAULTS = {
     // Rotation: size-based when sizeBytes is set, else daily; count keeps N rotated
     // files. All fields have CUE_STT_LOG_* runtime overrides (never persisted to disk).
     logging: {
-      level: 'info',            // debug|info|warn|error|fatal (maps to Python too)
+      level: 'debug',            // debug|info|warn|error|fatal (maps to Python too)
       logDir: '',               // '' → userData/logs (relative resolves under userData)
       console: true,            // console logging on/off
       file: true,               // rotating file on/off
@@ -81,6 +94,23 @@ const DEFAULTS = {
     },
   }
 };
+
+// Fold every registered LLM provider's defaultSettings into the DEFAULTS skeleton above (apiKeys,
+// models, ollama baseURL). This makes the provider descriptors the single source for those values:
+// adding an LLM provider = one folder whose defaultSettings fill these slots automatically, with no
+// edit to DEFAULTS. deepMerge (defined below; hoisted) unions disjoint provider keys; order is
+// immaterial since each provider contributes a disjoint slice. The folded result is byte-identical
+// to the pre-R1c literals — test/providers.test.js asserts the equivalence, and the store-defaults
+// suite stays green. Pure at load: provider modules lazy-require SDKs inside createEngine (never
+// called here), so nothing pulls a network dependency or spawns a transport.
+function foldLlmDefaults() {
+  let acc = {};
+  for (const d of registry.listProviders('llm')) {
+    if (d.defaultSettings) acc = deepMerge(acc, d.defaultSettings);
+  }
+  return acc;
+}
+const DEFAULTS = deepMerge(BASE_DEFAULTS, foldLlmDefaults());
 
 let data = null;
 

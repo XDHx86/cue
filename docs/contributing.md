@@ -16,8 +16,8 @@ npm start          # electron .
 ```
 
 Verbose capture/LLM traces: set `const DEBUG = true` at the top of
-[`main.js`](../main.js) / [`src/llm.js`](../src/llm.js) (or `CUE_ENV_DEBUG=1` for the
-`.env` loader). **Don't commit DEBUG on.**
+[`main.js`](../main.js) (or `CUE_ENV_DEBUG=1` for the `.env` loader). LLM provider traces also flow
+through the `child('llm')` Pino logger at debug level. **Don't commit DEBUG on.**
 
 ## Project layout
 

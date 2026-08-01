@@ -159,9 +159,17 @@ runtime overrides that are **never persisted** to `cue-data.json`.
   The STT push channels are `stt:status` (badge) and `stt:progress` (venv-install/model-download phases).
 - **Transcript turn shape** — `{ channel, text, ts }` must stay array-iterable; both
   `prompts.js formatTranscript` and the renderer's `transcript` consumer assume it.
-- **Provider switch** ([src/llm.js](../../src/llm.js)) — a new provider = DEFAULTS
-  `apiKeys`+`models` entry + a `streamX`/baseURL branch + a `ready` rule + store
-  auto-switch + renderer Settings UI + `statusText`. Ollama is the template (ADR-005).
+- **LLM provider registry** ([src/providers/llm/](../../src/providers/llm/), ADR-017) — adding
+  an LLM provider = one folder `src/providers/llm/<id>/index.js` calling `defineProvider` with
+  `capabilities`/`supportedModels`/`configurableSettings`/`defaultSettings`/`createEngine`.
+  No `src/llm.js` switch edit, no DEFAULTS slice (`defaultSettings` auto-folds into
+  [src/store.js](../../src/store.js) via `foldLlmDefaults`), no Settings-UI edit (R3 auto-builds
+  from `configurableSettings`). OpenAI-compatible gateways share
+  [src/providers/llm/openai-compat.js](../../src/providers/llm/openai-compat.js); shared helpers
+  (lazy logger + `stripDataUrl`) live in [src/providers/llm/shared.js](../../src/providers/llm/shared.js)
+  (kept below llm.js in the require graph — providers must not require llm.js). The old per-provider
+  `if/else` + `streamX` switch that lived in `src/llm.js` is gone; `createLLM` delegates. (STT stays
+  on the `src/stt.js` chain until R2.)
 - **STT engine** ([src/stt-engine.js](../../src/stt-engine.js)) — a new local engine = one
   `registerEngine(name, factory)` implementing `{ start, sendAudio, close }` +
   onFinal/onPartial/onStatus/onError, plus an `ENGINE_META` label + a DEFAULTS entry. main.js and
