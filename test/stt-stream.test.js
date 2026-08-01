@@ -59,7 +59,7 @@ test('decodeFrame unmask: a server (unmasked) frame decodes too', () => {
 // ---- handshake -------------------------------------------------------------
 
 test('makeHandshakeKey/expectedAccept match the RFC 6455 magic GUID', () => {
-  // RFC 6455 §4.2.2 worked example: key "dGhlIHNhbXBsZSBub25jZQ==" → accept "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+  // RFC 6455 section 4.2.2 worked example: key "dGhlIHNhbXBsZSBub25jZQ==" -> accept "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
   assert.equal(
     expectedAccept('dGhlIHNhbXBsZSBub25jZQ=='),
     's3pPLMBiTxaQ9kYGzzhZRbK+xOo=',
@@ -80,25 +80,32 @@ test('parseWsUrl splits ws:// and wss:// URLs with path and query', () => {
   assert.equal(a.secure, false); assert.equal(a.host, 'localhost'); assert.equal(a.port, 9080); assert.equal(a.path, '/stream');
   const b = parseWsUrl('wss://host/v1?token=t'); // wss with default port 443
   assert.equal(b.secure, true); assert.equal(b.host, 'host'); assert.equal(b.port, 443); assert.equal(b.path, '/v1?token=t');
-  const c = parseWsUrl('ws://127.0.0.1:9080'); // no path → "/"
+  const c = parseWsUrl('ws://127.0.0.1:9080'); // no path -> "/"
   assert.equal(c.path, '/');
 });
 
 // ---- resolveProvider / createStreamSTT ------------------------------------
 
-test('auto with no URL → unavailable (batch fallback), provider null', () => {
+test('auto with no URL -> unavailable (batch fallback), provider null', () => {
   assert.deepEqual(resolveProvider({ stt: { provider: 'auto' } }), { provider: null, available: false });
 });
 
-test('auto with a URL → faster-whisper available', () => {
-  assert.deepEqual(resolveProvider({ stt: { provider: 'auto', fasterWhisperURL: 'ws://x:9' } }), { provider: 'faster-whisper', available: true });
+test('auto with a URL (no local ready) -> external-ws available', () => {
+  assert.deepEqual(
+    resolveProvider({ stt: { provider: 'auto', fasterWhisperURL: 'ws://x:9' } }),
+    { provider: 'external-ws', available: true },
+  );
 });
 
-test('faster-whisper forced with no URL → unavailable', () => {
-  assert.deepEqual(resolveProvider({ stt: { provider: 'faster-whisper' } }), { provider: 'faster-whisper', available: false });
+test("faster-whisper setting (force external WS) with no URL -> unavailable", () => {
+  // 'faster-whisper' setting skips local providers and tries external-ws, which needs a URL.
+  assert.deepEqual(
+    resolveProvider({ stt: { provider: 'faster-whisper' } }),
+    { provider: null, available: false },
+  );
 });
 
-test('batch → unavailable', () => {
+test('batch -> unavailable', () => {
   assert.deepEqual(resolveProvider({ stt: { provider: 'batch' } }), { provider: 'batch', available: false });
 });
 
@@ -108,24 +115,30 @@ test("createStreamSTT returns null session for a non-streaming provider", () => 
   assert.equal(s.createSession(), null);
 });
 
-// ---- the managed 'local' transport (src/stt-engine.js via a fake manager) ----
+// ---- the managed local transport (src/stt-engine.js via a fake manager) ----
 
-test("resolveProvider 'local' → available iff the manager reports the venv ready", () => {
+test("resolveProvider 'local' -> available iff the manager reports the venv ready", () => {
   // readiness is a hint passed in (not read from disk) so the resolver stays pure.
-  assert.deepEqual(resolveProvider({ stt: { provider: 'local' } }, { localReady: true }), { provider: 'local', available: true });
-  assert.deepEqual(resolveProvider({ stt: { provider: 'local' } }, { localReady: false }), { provider: 'local', available: false });
+  assert.deepEqual(
+    resolveProvider({ stt: { provider: 'local' } }, { localReady: true }),
+    { provider: 'faster-whisper', available: true },
+  );
+  assert.deepEqual(
+    resolveProvider({ stt: { provider: 'local' } }, { localReady: false }),
+    { provider: null, available: false },
+  );
 });
 
 test("resolveProvider 'auto' prefers the managed local engine when ready, before the external WS URL", () => {
   // localReady wins over a configured external URL — the managed engine is local-first.
   const withBoth = resolveProvider({ stt: { provider: 'auto', fasterWhisperURL: 'ws://x:9' } }, { localReady: true });
-  assert.deepEqual(withBoth, { provider: 'local', available: true });
-  // without readiness, auto falls back to the external WS server (today's behavior).
+  assert.deepEqual(withBoth, { provider: 'faster-whisper', available: true });
+  // without readiness, auto falls back to the external WS server.
   const withUrl = resolveProvider({ stt: { provider: 'auto', fasterWhisperURL: 'ws://x:9' } }, { localReady: false });
-  assert.deepEqual(withUrl, { provider: 'faster-whisper', available: true });
+  assert.deepEqual(withUrl, { provider: 'external-ws', available: true });
 });
 
-test("auto with no URL and no readiness still → null/batch (today's default behavior)", () => {
+test("auto with no URL and no readiness still -> null/batch (today's default behavior)", () => {
   assert.deepEqual(resolveProvider({ stt: { provider: 'auto' } }, { localReady: false }), { provider: null, available: false });
 });
 
@@ -135,10 +148,10 @@ test("createStreamSTT 'local' builds an engine session via the wired manager; nu
     { localEngineManager: { isVenvReady: () => true } },
   );
   assert.equal(s.available, true);
-  // createEngineSession('faster-whisper', {manager, ...}) builds a LocalFasterWhisperSession.
+  assert.equal(s.provider, 'faster-whisper');
   const ses = s.createSession({ channel: 'you', onStatus: () => {}, onError: () => {} });
   assert.ok(ses && typeof ses.start === 'function' && typeof ses.sendAudio === 'function', 'a streaming session');
-  // With no manager wired in, the local engine degrades to null (→ batch in main).
+  // With no manager wired in, the local engine degrades to null (-> batch in main).
   const s2 = createStreamSTT(
     { stt: { provider: 'local', engine: 'faster-whisper', local: { model: 'small' } } },
     { localEngineManager: { isVenvReady: () => false } },
@@ -186,12 +199,12 @@ function loopbackServer(port) {
   });
 }
 
-test('session handshake → live partial + final frames round-trip over a real socket', async () => {
+test('session handshake -> live partial + final frames round-trip over a real socket', async () => {
   const server = await loopbackServer();
   const port = server.address().port;
   const got = { partial: [], final: [], status: [] };
 
-  const session = createStreamSTT({ stt: { provider: 'faster-whisper', fasterWhisperURL: 'ws://127.0.0.1:' + port + '/stream' } })
+  const session = createStreamSTT({ stt: { provider: 'auto', fasterWhisperURL: 'ws://127.0.0.1:' + port + '/stream' } })
     .createSession({ channel: 'you', onFinal: (r) => got.final.push(r), onPartial: (r) => got.partial.push(r), onStatus: (s) => got.status.push(s), onError: () => {} });
 
   session.start();

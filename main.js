@@ -28,7 +28,7 @@ const { getLogger, child, stopLogger } = require('./src/logger');
 // ADR-014). Lazily resolved: getLogger() needs store settings, so first use defers until then.
 let appLog_ = null;
 function appLog() { return appLog_ || (appLog_ = child('main')); }
-const { engineMeta } = require('./src/stt-engine');
+const { listProvidersSafe } = require('./src/registry');
 const { scanCachedModels } = require('./src/stt-models');
 
 // Single shared STT process manager. Created lazily (app.getPath isn't safe before
@@ -222,14 +222,11 @@ async function flushChannel(channel) {
       pcmBytes: pcm?.length,
     }, 'Loading STT provider');
 
-    const sttProvider = settings.stt && settings.stt.provider;
-    // The managed Python engine handles the batch fallback too when it applies
-    // (provider 'local'/'auto'): reuse the SAME shared manager the streaming path
-    // uses (openStreamSessions) so a degraded channel transcribes via the service's
-    // transcribe RPC instead of the obsolete HTTP POST. 'batch' and the external
-    // 'faster-whisper' WS provider don't pass the manager — they fall to cloud keys.
+    // The managed Python engine handles the batch fallback too when it applies (provider
+    // 'local'/'auto'): reuse the SAME shared manager the streaming path uses. Providers that
+    // don't need the manager (cloud-only) simply ignore it — no provider-specific branching.
     const stt = createSTT(settings, {
-      manager: (sttProvider === 'local' || sttProvider === 'auto') ? getSttManager() : undefined,
+      manager: getSttManager(),
       logger: getLogger(settings),
     });
 
@@ -408,11 +405,10 @@ function openStreamSessions() {
     send('stt:status', { active: false, reason: 'Speech-to-Text is off' });
     return;
   }
-  // 'local'/'auto-with-local-ready' engine needs the manager; the external 'faster-whisper'
-  // and 'batch' transports don't. Passed in so stt-stream resolves local readiness and builds
-  // the engine session without importing the manager itself.
+  // Always pass the manager — providers that need it (local) use it; cloud-only providers
+  // ignore it. No provider-specific branching.
   const stream = createStreamSTT(settings, {
-    localEngineManager: (sttCfg.provider === 'local' || sttCfg.provider === 'auto') ? getSttManager() : undefined,
+    localEngineManager: getSttManager(),
     logger: getLogger(settings),
   });
   // D9 — 'local' chosen but the venv isn't ready yet: kick the one-time bootstrap (progress
@@ -717,7 +713,7 @@ ipcMain.handle('stt:model:delete', async (_e, model) => {
     return await m.call('model_delete', { name: model, download_root: m.getModelsDir() });
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
-ipcMain.handle('stt:engine:list', () => engineMeta());
+ipcMain.handle('stt:engine:list', () => listProvidersSafe('stt').filter((p) => p.capabilities && p.capabilities.local));
 
 // -------- shortcuts --------
 function normalizeShortcut(accelerator) {

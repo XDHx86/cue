@@ -1,38 +1,10 @@
-// Engine-agnostic STT seam.
-//
-// The rest of the app (main.js, src/stt-stream.js) never names a local engine
-// directly. It calls createStreamSTT(settings, { localEngineManager }).createSession(...);
-// this module's registry picks the engine named by settings.stt.engine and builds a
-// session that speaks the SAME surface as the external faster-whisper WS session
-// in stt-stream.js ({ start, sendAudio(int16), close } + onFinal/onPartial/onStatus/onError).
-//
-// Adding a new local engine later (whisper.cpp, …) = one new file that calls
-// registerEngine('whisper-cpp', factory) implementing that surface. Nothing in main.js
-// or stt-stream.js changes — the whole point of the seam.
-//
-// The faster-whisper engine (the default, registered below) bridges start/sendAudio/close
-// onto the managed Python process's JSON-RPC (src/stt-process.js): load the model if it
-// isn't already, stream_start → sid, forward per-sid partial/final events, and stream_stop
-// on close. Audio is sent fire-and-forget (manager.notify) so the ~16 msg/s/channel audio
-// cadence never accumulates pending request promises.
+// Local STT engine — session + load-params utilities for the managed Python faster-whisper
+// service. The legacy engine registry (registerEngine/listEngines/createEngineSession/engineMeta)
+// has been removed (R2) — engine discovery now goes through the provider registry
+// (src/registry.js). This module only exports the session implementation and shared
+// constants consumed by the faster-whisper provider (src/providers/stt/faster-whisper/index.js).
 
-const engines = new Map();
-
-function registerEngine(name, factory) {
-  if (typeof factory !== 'function') throw new Error(`engine factory "${name}" must be a function`);
-  engines.set(name, factory);
-  return () => engines.delete(name);
-}
-function listEngines() { return [...engines.keys()]; }
-function hasEngine(name) { return engines.has(name); }
-function createEngineSession(name, opts) {
-  const factory = engines.get(name);
-  if (!factory) return null; // unknown engine → caller (stt-stream) degrades to batch
-  return factory(opts);
-}
-
-// Map engine id → { label } for the Settings engine selector (data-driven, future-proof).
-const ENGINE_META = { 'faster-whisper': { label: 'faster-whisper (local)' } };
+const LOCAL_TRANSCRIBE_TIMEOUT_MS = 30000;
 
 // Finite bounds for the local engine's start sequence. The previous design gave `load` an
 // INFINITE timeout (timeout:0) and let it download silently (local_files_only=False) — a stuck
@@ -47,16 +19,13 @@ const MODEL_LOAD_TIMEOUT_MS = 120 * 1000;          // cached load only — secon
 // ~2s of 16kHz mono Int16: enough that speech said during a *fast* cached load isn't lost while
 // keeping the ring small. A long first-download drops the tail past this window (unavoidable).
 const PRE_SID_BYTES = Math.floor(16000 * 2 * 2);
-function engineMeta() {
-  return [...engines.keys()].map((id) => ({ id, ...(ENGINE_META[id] || { label: id }) }));
-}
 
 // Shared source of truth for the managed Python engine's `load` params, derived from
 // settings.stt.local (model/device/computeType/vad) + the manager's models dir. Used by
-// BOTH the streaming session (below) and the batch provider (src/stt.js) so a batch call
-// that follows a streaming load reuses the SAME params and skips a redundant reload.
-// `language` is null-uniform: the streaming path always carries null (auto-detect) and the
-// batch path matches it so the params compare equal against manager.getLastLoad().
+// BOTH the streaming session (below) and the batch provider (src/providers/stt/faster-whisper)
+// so a batch call that follows a streaming load reuses the SAME params and skips a redundant
+// reload. `language` is null-uniform: the streaming path always carries null (auto-detect) and
+// the batch path matches it so the params compare equal against manager.getLastLoad().
 function localLoadParams(settings, manager, language = null) {
   const cfg = (settings && settings.stt && settings.stt.local) || {};
   return {
@@ -72,7 +41,7 @@ function localLoadParams(settings, manager, language = null) {
   };
 }
 
-// ---- local faster-whisper session (the registered engine) ---------------
+// ---- local faster-whisper session ---------------
 // `settings` is carried so start() reads stt.local.{model,device,computeType,vad} and
 // re-loads when the user changes them. `manager` is the createSttProcessManager instance.
 class LocalFasterWhisperSession {
@@ -119,7 +88,7 @@ class LocalFasterWhisperSession {
     if (!this.sid || this._closed || !this._preSid.length) { this._preSid = []; return; }
     const merged = Buffer.concat(this._preSid);
     this._preSid = [];
-    // base64 over the JSON pipe: 33% overhead at 16kHz mono ≈ 42 KB/s localhost — negligible.
+    // base64 over the JSON pipe: 33% overhead at 16kHz mono = 42 KB/s localhost — negligible.
     this.manager.notify('stream_audio', { sid: this.sid, pcm_b64: merged.toString('base64') });
   }
 
@@ -202,13 +171,7 @@ class LocalFasterWhisperSession {
   }
 }
 
-registerEngine('faster-whisper', (opts) => {
-  if (!opts || !opts.manager) return null; // no manager wired in → degrade (batch)
-  return new LocalFasterWhisperSession(opts);
-});
-
 module.exports = {
-  registerEngine, listEngines, hasEngine, createEngineSession, engineMeta,
   localLoadParams, LocalFasterWhisperSession,
   MODEL_DOWNLOAD_TIMEOUT_MS, MODEL_LOAD_TIMEOUT_MS, PRE_SID_BYTES,
 };

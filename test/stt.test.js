@@ -112,5 +112,4 @@ test('createSTT logs the registered providers at debug', () => {
   const reg = recs.find(([m]) => m === 'STT providers registered');
   assert.ok(reg, 'emitted a registration log line');
   assert.deepEqual(reg[1].providers, ['openai']);
-  assert.equal(reg[1].localReady, false);
 });

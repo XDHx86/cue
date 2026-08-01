@@ -2,44 +2,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-  registerEngine, listEngines, hasEngine, createEngineSession, engineMeta,
-  LocalFasterWhisperSession,
+  LocalFasterWhisperSession, localLoadParams, PRE_SID_BYTES,
 } = require('../src/stt-engine');
 
-// ---- registry ----
-
-test('faster-whisper is registered by default and listed', () => {
-  assert.ok(hasEngine('faster-whisper'), 'the default engine self-registers on require');
-  assert.ok(listEngines().includes('faster-whisper'));
-  const meta = engineMeta();
-  assert.ok(meta.find((m) => m.id === 'faster-whisper'));
-});
-
-test('registerEngine adds an engine and unregisterEngine removes it', () => {
-  const off = registerEngine('test-engine', () => ({ ok: true }));
-  assert.ok(hasEngine('test-engine'));
-  assert.ok(listEngines().includes('test-engine'));
-  off();
-  assert.ok(!hasEngine('test-engine'));
-  assert.ok(!listEngines().includes('test-engine'));
-});
-
-test('createEngineSession returns null for an unknown engine', () => {
-  assert.equal(createEngineSession('nope', {}), null);
-});
-
-test("createEngineSession('faster-whisper') returns null when no manager is wired", () => {
-  // No manager => the factory returns null so stt-stream degrades to batch — the
-  // engine is unavailable, not an exception.
-  assert.equal(createEngineSession('faster-whisper', {}), null);
-});
-
-test('registerEngine rejects a non-function factory', () => {
-  assert.throws(() => registerEngine('bad', {}), /must be a function/);
-});
-
 // ---- LocalFasterWhisperSession lifecycle over a fake manager ------------
-// Exercises the start→load→stream_start→audio→close flow without spawning Python.
+// Exercises the start->load->stream_start->audio->close flow without spawning Python.
 // The fake manager answers JSON-RPC calls with canned results and records notify()
 // audio writes so we can assert the audio path goes fire-and-forget.
 
@@ -76,7 +43,7 @@ test('start() loads the model, opens a stream, subscribes, and emits active stat
     settings: { stt: { local: { model: 'small', vad: true } } },
   });
   await s.start();
-  // call order: models_list (cache check) → load(+setLastLoad) → stream_start → 3× on(...).
+  // call order: models_list (cache check) -> load(+setLastLoad) -> stream_start -> 3x on(...).
   // The cache check reports the model cached so model_download is SKIPPED (download decoupled
   // from load — D1). setLastLoad is interleaved between load and stream_start, so filter to calls.
   const rpc = calls.filter((c) => c[0] === 'call').map((c) => c[1]);
@@ -140,7 +107,7 @@ test('partial/final events demux by sid onto the session callbacks', async () =>
     settings: { stt: { local: { model: 'small', vad: true } } },
   });
   await s.start();
-  // a partial for THIS session → fired; a partial for another sid → ignored
+  // a partial for THIS session -> fired; a partial for another sid -> ignored
   cbs.partial({ sid: '7', text: 'hel' });
   cbs.partial({ sid: '99', text: 'other' });
   cbs.final({ sid: '7', text: 'hello' });
@@ -172,7 +139,7 @@ test('start() downloads the model before load when it is not cached (D1)', async
   });
   await s.start();
   const rpc = calls.filter((c) => c[0] === 'call').map((c) => c[1]);
-  // models_list reports not-cached → model_download → load (cache-only) → stream_start
+  // models_list reports not-cached -> model_download -> load (cache-only) -> stream_start
   assert.deepEqual(rpc, ['models_list', 'model_download', 'load', 'stream_start']);
   // load is cache-only (local_files_only) so it can never block on a silent network fetch
   const load = calls.find((c) => c[0] === 'call' && c[1] === 'load');
@@ -203,7 +170,7 @@ test('sendAudio buffers PCM before sid is set and flushes it once start() comple
     manager: m, channel: 'you', onStatus: () => {},
     settings: { stt: { local: { model: 'small', vad: true } } },
   });
-  // Warm-up: sid is null → audio is buffered (no notify yet).
+  // Warm-up: sid is null -> audio is buffered (no notify yet).
   s.sendAudio(Buffer.from([1, 2, 3, 4]));
   s.sendAudio(Buffer.from([5, 6, 7, 8]));
   assert.ok(!calls.some((c) => c[0] === 'notify' && c[1] === 'stream_audio'),
@@ -223,7 +190,6 @@ test('sendAudio buffers PCM before sid is set and flushes it once start() comple
 // Exercise _bufferPreSid directly with sid held null (no async warm-up needed): pump far more
 // than PRE_SID_BYTES and assert the ring never materially exceeds the bound.
 test('the pre-sid buffer is bounded (D2)', () => {
-  const { PRE_SID_BYTES } = require('../src/stt-engine');
   assert.ok(PRE_SID_BYTES > 0, 'PRE_SID_BYTES is a positive bound');
   const calls = [];
   const m = fakeManager({ calls, cached: false });
@@ -231,7 +197,7 @@ test('the pre-sid buffer is bounded (D2)', () => {
     manager: m, channel: 'you', onStatus: () => {},
     settings: { stt: { local: { model: 'small', vad: true } } },
   });
-  // sid is null by construction → sendAudio buffers into the bounded ring (no notify).
+  // sid is null by construction -> sendAudio buffers into the bounded ring (no notify).
   const big = Buffer.alloc(PRE_SID_BYTES * 3, 7);
   for (let i = 0; i < big.length; i += 1024) s.sendAudio(big.subarray(i, i + 1024));
   let total = 0; for (const b of s._preSid) total += b.length;

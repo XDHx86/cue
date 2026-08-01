@@ -65,24 +65,12 @@ const BASE_DEFAULTS = {
   //   'auto' (prefer the managed local engine when ready, else the external WS server if a
   //   URL is set, else batch), 'local' (force the managed Python engine), 'faster-whisper'
   // (the external WS server the user runs themselves), or 'batch' (the legacy flush loop).
-  // `enabled` is the master STT toggle; `engine` selects the LOCAL engine (future-proof: a
-  // second engine like whisper.cpp registers in src/stt-engine.js and appears here). The
-  // `local.*` block configures the managed engine — kept separate from `stt.model`, which is
-  // the OpenAI Whisper model name for the *batch* fallback path.
+  // Provider-owned STT keys (engine, local.*, fasterWhisperURL, model) are folded in by the
+  // STT providers' defaultSettings via foldSttDefaults() below — single source of truth.
   stt: {
     provider: 'auto',
     enabled: true,                 // master STT toggle (Settings)
-    engine: 'faster-whisper',      // local engine selector — registry in src/stt-engine.js
-    local: {                       // managed engine config (src/stt-process.js + python/)
-      model: 'small',              // faster-whisper model size: tiny|base|small|medium|large-v3
-      device: 'auto',              // auto|cpu|cuda (auto → cuda if available else cpu)
-      computeType: 'int8',         // int8|int8_float16|float16|float32 (CPU default int8)
-      language: 'auto',            // BCP-47 code or 'auto' (null over the wire → detect)
-      vad: true,                    // webrtcvad endpoint detection during streaming
-    },
-    fasterWhisperURL: '',          // external (user-run) WS server; '' → not configured
     deepgramURL: 'wss://api.deepgram.com/v1/listen',
-    model: '', // OpenAI Whisper model name for the batch path (default 'whisper-1' in stt.js)
     // Structured STT logging (Pino on the Node side, Loguru in the spawned Python
     // service — src/logger.js / python/cue_stt_logging.py, ADR-014). `logDir` '' →
     // userData/logs (resolved lazily by the logger, so store.load() needs no Electron).
@@ -114,13 +102,28 @@ function foldLlmDefaults() {
   }
   return acc;
 }
-// DEFAULTS merges three layers: BASE_DEFAULTS (the non-provider skeleton) → provider
-// defaultSettings (folded in by the registry) → schemaDefaults (from config-schema.js,
+
+// Fold every registered STT provider's defaultSettings into the DEFAULTS skeleton above. STT
+// providers own: stt.engine, stt.local.*, stt.fasterWhisperURL, stt.model. This makes the
+// STT provider descriptors the single source for those values — adding an STT provider = one
+// folder whose defaultSettings fill these slots automatically. The folded result must equal
+// today's literal stt: block — test/store-defaults.test.js and test/providers.test.js assert
+// this. Pure at load (same safety as foldLlmDefaults).
+function foldSttDefaults() {
+  let acc = {};
+  for (const d of registry.listProviders('stt')) {
+    if (d.defaultSettings) acc = deepMerge(acc, d.defaultSettings);
+  }
+  return acc;
+}
+
+// DEFAULTS merges four layers: BASE_DEFAULTS (the non-provider skeleton) → LLM provider
+// defaultSettings → STT provider defaultSettings → schemaDefaults (from config-schema.js,
 // which holds every configurable runtime value). The schema layer adds nested keys like
 // llm.maxTokens, memory.minNewTurns, stt.maxSpawnFailures, ui.zoomMin, etc. that the
 // BASE_DEFAULTS skeleton doesn't declare — deepMerge creates them. Existing keys in
 // BASE_DEFAULTS are preserved; only new paths are added.
-const DEFAULTS = deepMerge(deepMerge(BASE_DEFAULTS, foldLlmDefaults()), schemaDefaults());
+const DEFAULTS = deepMerge(deepMerge(deepMerge(BASE_DEFAULTS, foldLlmDefaults()), foldSttDefaults()), schemaDefaults());
 
 let data = null;
 

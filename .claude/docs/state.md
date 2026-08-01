@@ -44,18 +44,13 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
   **238/238 tests pass.**
 
 ## In flight
-- Nothing mid-edit; the tree is a clean, tested R1b+R1c slice ready to commit (atomic: one
-  `feat(registry): R1b+R1c migrate LLM providers to a folder registry` commit, or two if reviewing
-  wants the split — R1b folders/tests then R1c llm/store delegation).
+- Nothing mid-edit; R2 is complete and verified (258/258 tests pass, no import cycles).
 
 ## Next
-1. **R2 — STT provider registry.** Migrate STT providers (faster-whisper local, openai Whisper,
-   gemini, external-ws) into `src/providers/stt/<id>/index.js`; `createSTT` builds the batch chain
-   from `listProviders({type:'stt'})`; `stt-stream.js` resolves stream sessions via
-   `createStreamSession`; fold `stt-engine.js`'s `registerEngine`/`engineMeta` into the provider
-   registry. Port, don't fix, the local/offline bug (§9). See HANDOFF R2.
-2. Then R3 (auto-generated Settings UI), R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging),
-   R8 (docs compression).
+1. **R3 — auto-generated provider Settings UI.** providers:spec IPC -> renderer builds provider
+   buttons + key/baseURL/model fields + provider-specific options from configurableSettings.
+   See HANDOFF R3.
+2. Then R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging), R8 (docs compression).
 
 ## Blockers / open questions
 - Manual UI reachability check for R3/R5/R6/R7 needs the user's machine (headless Electron can't
