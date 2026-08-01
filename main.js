@@ -896,11 +896,29 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  // Tear down the managed STT Python process so it never orphans on quit. `stop()`
-  // sends the service a shutdown, closes stdin, then kills after a grace — harmless
-  // if the manager was never started (no child). Then flush the Pino transport
-  // (src/logger.js) so the rotating-file worker drains before the process exits.
+
+  // Graceful shutdown: flush all pending state before the process exits.
+  // All operations here are synchronous (best-effort) — if any fail, we still
+  // shut down rather than hanging.
+
+  // 1. Stop the memory runner and persist the rolling summary to cue-memory.json.
+  //    This must happen before the LLM process is torn down (summarize may be in flight).
+  if (state.capturing && memoryRunner) {
+    try { memoryRunner.stop(); memoryRunner.persist(); } catch { /* best-effort */ }
+  }
+
+  // 2. Close streaming STT sessions (sends 'stream_stop' to local engine, Terminate to
+  //    AssemblyAI WS, etc.) and stop the batch flush loop.
+  try { closeStreamSessions(); } catch { /* best-effort */ }
+
+  // 3. Tear down the managed STT Python process so it never orphans on quit. `stop()`
+  //    sends the service a shutdown, closes stdin, then kills after a grace — harmless
+  //    if the manager was never started (no child).
   if (sttManager) { try { sttManager.stop(); } catch { /* best-effort */ } }
+
+  // 4. Flush the Pino transport (src/logger.js) so the rotating-file worker drains
+  //    before the process exits. This is the last operation — log messages from the
+  //    shutdown steps above are written before the transport closes.
   stopLogger();
 });
 app.on('window-all-closed', () => app.quit());

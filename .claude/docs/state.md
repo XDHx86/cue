@@ -19,6 +19,10 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 - `main` — latest commit: `d04ad29 feat: add external WebSocket STT provider and local faster-whisper support`.
 
 ## Completed (this session)
+- **Groq STT provider.** New batch provider at `src/providers/stt/groq/` (order 25, between
+  OpenAI and Gemini). Uses `openai` npm SDK with custom `baseURL: api.groq.com/openai/v1`.
+  Supported models: whisper-large-v3-turbo (default), whisper-large-v3, distil-whisper-large-v3-en.
+  API key field added to Settings UI. Provider auto-registers via folder discovery.
 - **AssemblyAI universal-streaming STT provider.** New provider at
   `src/providers/stt/assemblyai/` (order 15, streaming only, v3 WebSocket protocol at
   `wss://streaming.assemblyai.com/v3/ws`). Hand-rolled using WsClient from external-ws

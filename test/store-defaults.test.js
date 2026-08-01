@@ -281,3 +281,64 @@ test('validation clamps out-of-range values on load', () => {
   assert.equal(s.llm.maxTokens, 256, 'clamped to min');
   assert.equal(s.ui.zoomMin, 2.0, 'clamped to max');
 });
+
+// ---- validatePatch (setSettings validation) ----
+
+test('validatePatch returns empty for valid patch', () => {
+  const { validatePatch } = require('../src/store');
+  const errors = validatePatch({ apiKeys: { openai: 'sk-test123' } });
+  assert.deepEqual(errors, [], 'valid patch should have no errors');
+});
+
+test('validatePatch catches invalid OpenAI key format', () => {
+  const { validatePatch } = require('../src/store');
+  const errors = validatePatch({ apiKeys: { openai: 'invalid-key' } });
+  assert.ok(errors.some((e) => e.includes('OpenAI')), 'should warn about OpenAI key format');
+});
+
+test('validatePatch catches invalid Groq key format', () => {
+  const { validatePatch } = require('../src/store');
+  const errors = validatePatch({ apiKeys: { groq: 'invalid-key' } });
+  assert.ok(errors.some((e) => e.includes('Groq')), 'should warn about Groq key format');
+});
+
+test('validatePatch accepts valid Groq key', () => {
+  const { validatePatch } = require('../src/store');
+  const errors = validatePatch({ apiKeys: { groq: 'gsk_abc123def456' } });
+  assert.ok(!errors.some((e) => e.includes('Groq')), 'valid Groq key should not warn');
+});
+
+test('validatePatch catches unknown STT provider', () => {
+  const { validatePatch } = require('../src/store');
+  const errors = validatePatch({ stt: { provider: 'nonexistent' } });
+  assert.ok(errors.some((e) => e.includes('STT provider')), 'should warn about unknown STT provider');
+});
+
+test('validatePatch accepts valid STT providers', () => {
+  const { validatePatch } = require('../src/store');
+  for (const p of ['auto', 'local', 'faster-whisper', 'batch', 'assemblyai', 'groq']) {
+    const errors = validatePatch({ stt: { provider: p } });
+    assert.ok(!errors.some((e) => e.includes('STT provider')), p + ' should be valid');
+  }
+});
+
+test('validatePatch catches unknown LLM provider', () => {
+  const { validatePatch } = require('../src/store');
+  const errors = validatePatch({ provider: 'nonexistent' });
+  assert.ok(errors.some((e) => e.includes('LLM provider')), 'should warn about unknown LLM provider');
+});
+
+test('validatePatch accepts valid LLM providers', () => {
+  const { validatePatch } = require('../src/store');
+  for (const p of ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama']) {
+    const errors = validatePatch({ provider: p });
+    assert.ok(!errors.some((e) => e.includes('LLM provider')), p + ' should be valid');
+  }
+});
+
+test('setSettings applies validation (schema clamping in patch)', () => {
+  // setSettings should clamp out-of-range values in the patch
+  store.setSettings({ llm: { maxTokens: -999 } });
+  const s = store.getSettings();
+  assert.equal(s.llm.maxTokens, 256, 'clamped to min on setSettings');
+});

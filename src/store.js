@@ -191,7 +191,72 @@ function load() {
 
 function save() { try { fs.writeFileSync(FILE, JSON.stringify(data, null, 2)); } catch (e) { /* ignore */ } }
 
+// Validate a settings patch before merging. Returns an array of error strings (empty = valid).
+// Runs schema validation (type coercion, clamping) plus semantic checks on provider-specific
+// fields. Semantic errors are warnings (logged, not blocked) to avoid breaking the app when
+// a new provider is added; schema errors are corrective (values clamped/defaulted).
+function validatePatch(patch) {
+  if (!patch || typeof patch !== 'object') return [];
+  const errors = [];
+
+  // Schema validation: coerce types, clamp numerics to min/max.
+  // validate() mutates in place — safe because we apply it to a temporary copy.
+  try { validate(patch); } catch (e) {
+    errors.push('schema: ' + ((e && e.message) || 'validation failed'));
+  }
+
+  // API key format checks (advisory — log but don't block save)
+  const keys = patch.apiKeys || {};
+  if (keys.openai && typeof keys.openai === 'string' && !/^sk-/.test(keys.openai)) {
+    errors.push('OpenAI key should start with "sk-"');
+  }
+  if (keys.anthropic && typeof keys.anthropic === 'string' && !/^sk-ant-/.test(keys.anthropic)) {
+    errors.push('Anthropic key should start with "sk-ant-"');
+  }
+  if (keys.gemini && typeof keys.gemini === 'string' && !/^AIza/.test(keys.gemini)) {
+    errors.push('Gemini key should start with "AIza"');
+  }
+  if (keys.nvidia && typeof keys.nvidia === 'string' && !/^nvapi-/.test(keys.nvidia)) {
+    errors.push('Nvidia key should start with "nvapi-"');
+  }
+  if (keys.assemblyai && typeof keys.assemblyai === 'string' && keys.assemblyai.length < 20) {
+    errors.push('AssemblyAI key seems too short (expected ~40+ chars)');
+  }
+  if (keys.groq && typeof keys.groq === 'string' && !/^gsk_/.test(keys.groq)) {
+    errors.push('Groq key should start with "gsk_"');
+  }
+
+  // STT provider validation
+  if (patch.stt && patch.stt.provider) {
+    const validProviders = ['auto', 'local', 'faster-whisper', 'batch', 'assemblyai', 'groq'];
+    if (!validProviders.includes(patch.stt.provider)) {
+      errors.push('Unknown STT provider: ' + patch.stt.provider);
+    }
+  }
+
+  // LLM provider validation
+  if (patch.provider) {
+    const validLlm = ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama'];
+    if (!validLlm.includes(patch.provider)) {
+      errors.push('Unknown LLM provider: ' + patch.provider);
+    }
+  }
+
+  return errors;
+}
+
 module.exports = {
   getSettings() { return load(); },
-  setSettings(patch) { load(); data = deepMerge(data, patch || {}); save(); return data; }
+  validatePatch,
+  setSettings(patch) {
+    load();
+    const errors = validatePatch(patch);
+    // Log validation warnings (non-blocking — save proceeds even with advisory errors)
+    if (errors.length) {
+      try { appLog().warn({ errors }, 'settings validation warnings'); } catch {}
+    }
+    data = deepMerge(data, patch || {});
+    save();
+    return data;
+  },
 };

@@ -98,6 +98,7 @@ cue uses **your own** API key, so it's free to run (you only pay your AI provide
 | **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | Great for screen & coding help. Claude has no speech-to-text, so add an OpenAI or Gemini key too if you want the listening features. |
 | **Google Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | One key does chat + transcription. |
 | **AssemblyAI** | [assemblyai.com/dashboard](https://www.assemblyai.com/dashboard/account) | Real-time streaming transcription via v3 WebSocket API. Set Transport to "AssemblyAI (cloud streaming)" in Settings → Transcription. |
+| **Groq** | [console.groq.com/keys](https://console.groq.com/keys) | Fast batch transcription via OpenAI-compatible endpoint. Uses Whisper models with Groq's accelerated inference. |
 
 Your key is stored **only on your computer** (in `cue-data.json`) and is sent **only** to that provider. cue has no server and collects nothing.
 

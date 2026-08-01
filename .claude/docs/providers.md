@@ -61,6 +61,7 @@ from audio-capable keys, **openai → gemini**, and falls across providers on er
 | faster-whisper (local) | yes | yes | Managed Python service (venv spawn + JSON-RPC). Order 10. |
 | assemblyai | yes | no | `wss://streaming.assemblyai.com/v3/ws`. Auth via `Authorization` header (raw API key). Audio: pcm_s16le binary frames (~50ms chunks). Reconnect with exponential backoff; latches after 3 failures. Order 15. |
 | openai | no | yes | Whisper API (`audio.transcriptions`). Order 20. |
+| groq | no | yes | OpenAI-compatible endpoint (`api.groq.com/openai/v1`). Uses `openai` SDK with custom `baseURL`. Fast inference. Order 25. |
 | gemini | no | yes | `generateContent` with inline audio. Order 30. |
 | external-ws | yes | no | User-run faster-whisper WS server. Order 40. |
 
@@ -74,6 +75,9 @@ from audio-capable keys, **openai → gemini**, and falls across providers on er
   Protocol reference: `assemblyai` npm package v4.36.4 (NOT used as dependency — hand-rolled
   using WsClient from external-ws). Provider descriptor auto-registers; Settings UI auto-builds
   from `configurableSettings`.
+- **Groq** — fast batch transcription via OpenAI-compatible endpoint (`api.groq.com/openai/v1`).
+  Uses the `openai` npm package with a custom `baseURL`. API key set in Settings → API Keys.
+  Supported models: `whisper-large-v3-turbo` (default), `whisper-large-v3`, `distil-whisper-large-v3-en`.
 
 ## Error normalization (ADR-011)
 

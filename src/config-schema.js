@@ -309,6 +309,48 @@ const SCHEMA = [
     label: 'Stderr tail (bytes)',
     hint: 'Bytes of Python stderr kept for diagnostics display.',
   },
+
+  // ---- Logging (Advanced tab — structured logging config) -------------------
+  {
+    path: 'stt.logging.level',
+    type: 'string', default: 'debug', min: 0, max: 20,
+    tier: 'ui', restart: false,
+    tab: 'advanced', section: 'Logging',
+    label: 'Log level',
+    hint: 'debug|info|warn|error|fatal. Controls both Node (Pino) and Python (Loguru) logging.',
+  },
+  {
+    path: 'stt.logging.logDir',
+    type: 'string', default: '', min: 0, max: 256,
+    tier: 'ui', restart: false,
+    tab: 'advanced', section: 'Logging',
+    label: 'Log directory',
+    hint: 'Empty = userData/logs. Relative paths resolve under userData.',
+  },
+  {
+    path: 'stt.logging.console',
+    type: 'bool', default: true,
+    tier: 'ui', restart: false,
+    tab: 'advanced', section: 'Logging',
+    label: 'Console logging',
+    hint: 'Log to stderr (via Pino transport).',
+  },
+  {
+    path: 'stt.logging.file',
+    type: 'bool', default: true,
+    tier: 'ui', restart: false,
+    tab: 'advanced', section: 'Logging',
+    label: 'File logging',
+    hint: 'Log to rotating files under the log directory.',
+  },
+  {
+    path: 'stt.logging.pretty',
+    type: 'bool', default: true,
+    tier: 'ui', restart: false,
+    tab: 'advanced', section: 'Logging',
+    label: 'Pretty console output',
+    hint: 'Human-readable console format (false = compact JSON).',
+  },
   {
     path: 'main.backoffBaseMs',
     type: 'int', default: 1000, min: 100, max: 10000,

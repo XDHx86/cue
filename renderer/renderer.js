@@ -477,6 +477,7 @@
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
     $('#key-assemblyai').value = settings.apiKeys.assemblyai || '';
+    $('#key-groq').value = settings.apiKeys.groq || '';
     $('#ollama-baseurl').value = (settings.ollama && settings.ollama.baseURL) || '';
     $('#resume-context').value = settings.resumeContext || '';
     // Assistant style: read the live promptOverrides.prePrompt home (the legacy top-level
@@ -545,6 +546,7 @@
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
     settings.apiKeys.assemblyai = $('#key-assemblyai').value.trim();
+    settings.apiKeys.groq = $('#key-groq').value.trim();
     settings.ollama = { baseURL: $('#ollama-baseurl').value.trim() };
     settings.resumeContext = $('#resume-context').value.trim();
     // Pre-prompt: write the live promptOverrides.prePrompt home (the only override composeSystem
