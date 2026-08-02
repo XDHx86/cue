@@ -30,7 +30,9 @@ returns `{ provider, model, apiKey, ready, stream({system,turns,imageDataUrl,onT
 | anthropic | [llm/anthropic/](../../src/providers/llm/anthropic/index.js) | `@anthropic-ai/sdk`. **Requires `maxTokens`** → pinned 4096. Image via `source:{type:'base64',media_type,data}` (`stripDataUrl`). |
 | gemini | [llm/gemini/](../../src/providers/llm/gemini/index.js) | `@google/genai`. `generateContentStream`; image via `inlineData` (`stripDataUrl`); role remap `assistant`→`model`. |
 | nvidia | [llm/nvidia/](../../src/providers/llm/nvidia/index.js) | `openai` + fixed `baseURL: https://integrate.api.nvidia.com/v1` (ADR-005). Shares [openai-compat.js](../../src/providers/llm/openai-compat.js). |
-| ollama | [llm/ollama/](../../src/providers/llm/ollama/index.js) | `openai` + local `baseURL: settings.ollama.baseURL \|\| http://localhost:11434/v1`. **Sentinel `apiKey: 'ollama'`** (SDK needs non-empty; Ollama ignores) and **ready = `!!model` only** — the shared engine's `id==='ollama'` branch bypasses the key gate (ADR-005). |
+| ollama | [llm/ollama/](../../src/providers/llm/ollama/index.js) | `openai` + local `baseURL: settings.ollama.baseURL \|\| http://localhost:11434/v1`. **Sentinel `apiKey: 'ollama'`** (SDK needs non-empty; Ollama ignores). Ready reflects actual server availability via `local-health.js` (periodic GET `/v1/models`). |
+| groq | [llm/groq/](../../src/providers/llm/groq/index.js) | `openai` + fixed `baseURL: https://api.groq.com/openai/v1`. Same API key powers Groq STT. Models: Llama 3.1 8B Instant (fast), Llama 3.3 70B Versatile (smart). No vision. |
+| omni | [llm/omni/](../../src/providers/llm/omni/index.js) | `openai` + local `baseURL: settings.omniroute.baseURL \|\| http://localhost:20128/v1`. **Sentinel `apiKey: 'omniroute'`**. Ready reflects actual gateway availability via `local-health.js` (periodic GET `/v1/models`). Model `auto` = free routing across 290+ providers. |
 
 **Adding a provider = one folder calling `defineProvider`.** No `src/llm.js` switch edit, no
 `DEFAULTS` slice, no Settings-UI edit (R3 auto-builds from `configurableSettings`); `defaultSettings`
@@ -64,7 +66,9 @@ from audio-capable keys, **openai → gemini**, and falls across providers on er
 | openai | no | yes | Whisper API (`audio.transcriptions`). Order 20. |
 | groq | no | yes | OpenAI-compatible endpoint (`api.groq.com/openai/v1`). Uses `openai` SDK with custom `baseURL`. Fast inference. Order 25. |
 | gemini | no | yes | `generateContent` with inline audio. Order 30. |
+| omni | no | yes | Local OmniRoute gateway (`localhost:20128/v1`). OpenAI-compatible `audio.transcriptions`. Ready reflects actual gateway availability via `local-health.js`. Order 35. |
 | external-ws | yes | no | User-run faster-whisper WS server. Order 40. |
+| ollama | yes | yes | Delegates to managed faster-whisper engine (same manager, different id). Order 50 — only activates when explicitly selected; never interferes with `auto`. |
 
 - **OpenAI Whisper** — one key does chat + transcription, **but** a project key restricted
   to chat-only models **403s on Whisper** (common user pitfall → README troubleshooting).

@@ -30,6 +30,11 @@ let appLog_ = null;
 function appLog() { return appLog_ || (appLog_ = child('main')); }
 const { listProviders, listProvidersSafe, resolveSupportedModels } = require('./src/registry');
 const { scanCachedModels } = require('./src/stt-models');
+// Local-service health checks (OmniRoute gateway reachability, local faster-whisper engine
+// readiness). Populated at startup + on settings:set + periodically; providers read it
+// synchronously via isReady() so `ready` reflects actual service availability.
+const localHealth = require('./src/providers/local-health');
+const { localManagerReady } = require('./src/stt-managers');
 
 // Single shared STT process manager. Created lazily (app.getPath isn't safe before
 // whenReady) and cached; openStreamSessions and the Settings IPC handlers share it.
@@ -644,6 +649,8 @@ ipcMain.handle('settings:schema', () => {
 ipcMain.handle('settings:set', (_e, patch) => {
   sttDisabled = false;
   sttStreamDisabled = false;
+  // Refresh local-service health after a settings save (e.g. a changed OmniRoute base URL).
+  localHealth.checkAll(store.getSettings(), { localManagerReady });
   // Regenerate the résumé digest when the user edited the full résumé. Fire-and-forget: the
   // settings save is not blocked, and a missing/unready provider leaves the old digest in place
   // (the summary tier then falls back to the full résumé). Clearing the résumé also clears the
@@ -893,6 +900,12 @@ app.whenReady().then(() => {
   const initSettings = store.getSettings();
   setTranscriptConfig({ maxTurns: initSettings.transcript && initSettings.transcript.maxTurns });
 
+  // Local-service health checks (OmniRoute gateway reachability, local faster-whisper engine
+  // readiness). Populated at startup so provider `ready` reflects actual availability; the
+  // periodic poll catches services (e.g. OmniRoute, Ollama) started after cue.
+  localHealth.checkAll(initSettings, { localManagerReady });
+  localHealth.startPeriodicCheck(() => store.getSettings(), { localManagerReady });
+
   // Rolling-summary compaction runner. The watermark IS transcriptState.lastSummarizedTs (src/
   // transcript.js exposes it for memory.js to advance), so this module advances it through the
   // injected accessors rather than owning its own. The summarize call reuses createLLM with the
@@ -934,6 +947,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  localHealth.stopPeriodicCheck();
 
   // Graceful shutdown: flush all pending state before the process exits.
   // All operations here are synchronous (best-effort) — if any fail, we still

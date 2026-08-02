@@ -4,13 +4,14 @@
 //      key, Ollama ignores it, and a runtime value pulled from settings could be blanked by the
 //      user in Settings, so we pass the sentinel directly (never settings.apiKeys.ollama).
 //   2. baseURL = settings.ollama.baseURL || 'http://localhost:11434/v1' (Ollama's default).
-// readiness: ollama needs only a model (no real key), so the engine's ready is just !!model —
-// this is why the auto-switch in src/store.js never picks ollama (a running server isn't
-// guaranteed). The 'ollama' sentinel in DEFAULTS apiKeys is non-empty to keep deepMerge from
-// treating ollama as "no key configured".
+// readiness: ollama needs only a model (no real key), but `ready` reflects ACTUAL `ollama serve`
+// availability via local-health.js (a periodic HTTP GET to /v1/models), not just configuration —
+// a model without a running server reports not-ready. The 'ollama' sentinel in DEFAULTS apiKeys is
+// non-empty to keep deepMerge from treating ollama as "no key configured".
 
 const { defineProvider } = require('../../../registry');
 const { makeOpenAICompatEngine } = require('../openai-compat');
+const localHealth = require('../../local-health');
 
 const OLLAMA = 'ollama';
 const DEFAULT_BASE_URL = 'http://localhost:11434/v1';
@@ -20,7 +21,7 @@ defineProvider({
   displayName: 'Ollama (local)',
   description: 'Local models via your own `ollama serve` (OpenAI-compatible /v1 endpoint). No API key.',
   providerType: 'llm',
-  order: 5,
+  order: 6,
   capabilities: { streaming: true, vision: true },
   supportedModels: [
     { id: 'llama3.2', label: 'Llama 3.2' },
@@ -38,11 +39,16 @@ defineProvider({
   },
   createEngine({ settings }) {
     const baseURL = (settings.ollama && settings.ollama.baseURL) || DEFAULT_BASE_URL;
-    return makeOpenAICompatEngine({
+    const engine = makeOpenAICompatEngine({
       id: OLLAMA,
       settings,
       apiKey: OLLAMA,        // sentinel — never the user setting (could be blank); Ollama ignores it
       baseURL,
     });
+    // Override ready: reflect actual `ollama serve` availability, not just configuration.
+    return {
+      ...engine,
+      ready: localHealth.isReady(OLLAMA) && !!engine.model,
+    };
   },
 });

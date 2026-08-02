@@ -13,7 +13,7 @@ defineProvider({
   displayName: 'NVIDIA NIM',
   description: 'Nvidia-hosted models via the integrate API (OpenAI-compatible).',
   providerType: 'llm',
-  order: 4,
+  order: 5,
   capabilities: { streaming: true, vision: true },
   supportedModels: [
     { id: 'meta/llama-3.2-11b-vision-instruct', label: 'Llama 3.2 11B Vision' },

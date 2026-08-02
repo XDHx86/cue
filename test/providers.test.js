@@ -53,12 +53,12 @@ function loadReal() {
   loader.loadProviders({ _require: require });
 }
 
-test('loading the real src/providers tree registers the 5 LLM providers and 8 STT providers', () => {
+test('loading the real src/providers tree registers the 7 LLM providers and 10 STT providers', () => {
   loadReal();
   const ids = registry.listProviders('llm').map((d) => d.id);
-  assert.deepEqual(ids, ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama'], 'LLM ids + order');
+  assert.deepEqual(ids, ['openai', 'anthropic', 'gemini', 'groq', 'nvidia', 'ollama', 'omni'], 'LLM ids + order');
   const sttIds = registry.listProviders('stt').map((d) => d.id);
-  assert.deepEqual(sttIds, ['funasr', 'faster-whisper', 'assemblyai', 'deepgram', 'openai', 'groq', 'gemini', 'external-ws'], 'STT ids + order');
+  assert.deepEqual(sttIds, ['funasr', 'faster-whisper', 'assemblyai', 'deepgram', 'openai', 'groq', 'gemini', 'omni', 'external-ws', 'ollama'], 'STT ids + order');
 });
 
 test('every STT provider declares modelSettingsPath (string or null)', () => {
@@ -87,11 +87,16 @@ test('every LLM descriptor validates and has a render-safe, function-bearing cre
   }
 });
 
-test('capabilities match the pre-refactor LLM switch (all stream + vision)', () => {
+test('capabilities match the pre-refactor LLM switch (all stream + vision where supported)', () => {
   loadReal();
   for (const d of registry.listProviders('llm')) {
     assert.equal(d.capabilities.streaming, true, d.id + ' streams');
-    assert.equal(d.capabilities.vision, true, d.id + ' vision (image input)');
+    // Groq LLM has no vision support (Llama models don't accept image input); all others do.
+    if (d.id === 'groq') {
+      assert.equal(d.capabilities.vision, false, d.id + ' does not support vision');
+    } else {
+      assert.equal(d.capabilities.vision, true, d.id + ' vision (image input)');
+    }
   }
 });
 
@@ -108,53 +113,72 @@ test('folded LLM defaultSettings reproduce today\'s literal DEFAULTS slices (api
   loadReal();
   const fold = foldDefaults('llm');
   assert.deepEqual(fold.apiKeys, {
-    openai: '', anthropic: '', gemini: '', nvidia: '', ollama: 'ollama',
+    openai: '', anthropic: '', gemini: '', groq: '', nvidia: '', ollama: 'ollama', omni: 'omniroute',
   }, 'apiKeys fold matches store DEFAULTS.apiKeys (deepgram is STT, added by store, not here)');
   assert.deepEqual(fold.models, {
     openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
     anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
     gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
+    groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
     nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' },
     ollama: { fast: 'llama3.2', smart: 'llama3.3' },
+    omni: { fast: 'auto', smart: 'auto' },
   }, 'models fold matches store DEFAULTS.models');
   assert.deepEqual(fold.ollama, { baseURL: '' }, 'ollama baseURL default folds in (was a store literal)');
+  assert.deepEqual(fold.omniroute, { baseURL: '' }, 'omniroute baseURL default folds in');
 });
 
 test('createEngine resolves the apiKeys/models keys from settings and reports ready (stubbed — no SDK)', () => {
   loadReal();
   // Stub settings with keys + models present; createEngine must NOT call any SDK at construction
   // (it lazy-requires inside stream()). We assert the engine shape + readiness, never call stream.
+  // Remote providers (openai, anthropic, gemini, nvidia, groq) are ready with key+model.
+  // Local providers (ollama, omni) require a health check — without it, ready=false.
   const settings = {
     smart: false,
-    apiKeys: { openai: 'sk-x', anthropic: 'sk-y', gemini: 'AIza', nvidia: 'nvapi', ollama: 'ollama' },
+    apiKeys: { openai: 'sk-x', anthropic: 'sk-y', gemini: 'AIza', nvidia: 'nvapi', ollama: 'ollama', groq: 'gsk_x', omni: 'omniroute' },
     models: {
       openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
       anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
       gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
+      groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
       nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' },
       ollama: { fast: 'llama3.2', smart: 'llama3.3' },
+      omni: { fast: 'auto', smart: 'auto' },
     },
     ollama: { baseURL: '' },
+    omniroute: { baseURL: '' },
   };
+  const remoteProviders = ['openai', 'anthropic', 'gemini', 'groq', 'nvidia'];
+  const localProviders = ['ollama', 'omni'];
   for (const d of registry.listProviders('llm')) {
     const eng = d.createEngine({ settings });
     assert.equal(eng.provider, d.id, d.id + ' engine.provider');
-    assert.equal(eng.ready, true, d.id + ' ready with key+model');
+    if (remoteProviders.includes(d.id)) {
+      assert.equal(eng.ready, true, d.id + ' ready with key+model (remote)');
+    } else if (localProviders.includes(d.id)) {
+      assert.equal(eng.ready, false, d.id + ' not ready without health check (local)');
+    }
     assert.equal(typeof eng.stream, 'function', d.id + ' engine.stream is a function');
     assert.equal(eng.model, settings.models[d.id].fast, d.id + ' picks fast tier when smart=false');
   }
 });
 
-test('createEngine ready=false when key/model absent (ollama: only model gate)', () => {
+test('createEngine ready=false when key/model absent or health check cold (local providers)', () => {
   loadReal();
   const noKey = (extra = {}) => ({ smart: false, apiKeys: {}, models: {}, ollama: { baseURL: '' }, ...extra });
-  // openai without key+model → not ready
+  // openai without key+model → not ready (remote, key+model gate)
   assert.equal(registry.getProvider('llm', 'openai').createEngine({ settings: noKey() }).ready, false);
-  // ollama with a model but no key → STILL ready (the sentinel + !!model gate)
+  // ollama with a model but no health check → not ready (local providers require a health check)
   const ollamaEng = registry.getProvider('llm', 'ollama').createEngine({
     settings: noKey({ models: { ollama: { fast: 'llama3.2', smart: 'llama3.3' } } }),
   });
-  assert.equal(ollamaEng.ready, true, 'ollama ready with only a model (matches pre-refactor gate)');
-  // ollama with no model → not ready even though the sentinel key exists
+  assert.equal(ollamaEng.ready, false, 'ollama not ready without health check (local provider)');
+  // ollama with no model → not ready (model gate still applies even if health check passed)
   assert.equal(registry.getProvider('llm', 'ollama').createEngine({ settings: noKey() }).ready, false);
+  // omni with a model but no health check → not ready (local provider)
+  const omniEng = registry.getProvider('llm', 'omni').createEngine({
+    settings: noKey({ models: { omni: { fast: 'auto', smart: 'auto' } }, omniroute: { baseURL: '' } }),
+  });
+  assert.equal(omniEng.ready, false, 'omni not ready without health check (local provider)');
 });

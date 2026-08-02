@@ -19,6 +19,22 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 - `main` — latest commit: `d04ad29 feat: add external WebSocket STT provider and local faster-whisper support`.
 
 ## Completed (this session)
+- **Groq LLM provider.** New LLM provider at `src/providers/llm/groq/` (order 4). Reuses
+  `makeOpenAICompatEngine` with `baseURL: https://api.groq.com/openai/v1`. Models: Llama 3.1
+  8B Instant (fast), Llama 3.3 70B Versatile (smart). Same API key powers Groq STT.
+  `ready = !!apiKey && !!model` (remote API). Npm order: nvidia→5, ollama→6.
+- **OmniRoute LLM + STT providers.** New dual-pipeline provider at `src/providers/llm/omni/`
+  and `src/providers/stt/omni/`. Local AI gateway (localhost:20128, OpenAI-compatible, no API
+  key needed). LLM: `auto` model for free routing across 290+ providers. STT: batch Whisper
+  via `audio.transcriptions`. Ready reflects actual gateway availability via `local-health.js`.
+- **Ollama STT provider.** New STT provider at `src/providers/stt/ollama/` (order 50). Delegates
+  to the managed faster-whisper engine — same manager, same session, different id. Only activates
+  when explicitly selected (never interferes with `auto`).
+- **Local health check module.** `src/providers/local-health.js` — lightweight HTTP health
+  cache for local services (OmniRoute, Ollama, faster-whisper). Synchronous `isReady(id)` for
+  provider `createEngine`; async `checkAll()` populates cache; 15s periodic re-check so
+  services started after cue are detected. Wired into main.js at startup, `settings:set`,
+  and `will-quit`.
 - **Groq STT provider.** New batch provider at `src/providers/stt/groq/` (order 25, between
   OpenAI and Gemini). Uses `openai` npm SDK with custom `baseURL: api.groq.com/openai/v1`.
   Supported models: whisper-large-v3-turbo (default), whisper-large-v3, distil-whisper-large-v3-en.

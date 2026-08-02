@@ -177,7 +177,7 @@ function load() {
 
   // Auto-switch provider if the current one has no key, but another one does.
   if (!data.apiKeys[data.provider]) {
-    const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia'];
+    const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia', 'groq'];
     const active = validProviders.find(p => data.apiKeys[p]);
     if (active) {
       data.provider = active;
@@ -243,7 +243,7 @@ function validatePatch(patch) {
 
   // LLM provider validation
   if (patch.provider) {
-    const validLlm = ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama'];
+    const validLlm = ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama', 'groq', 'omni'];
     if (!validLlm.includes(patch.provider)) {
       errors.push('Unknown LLM provider: ' + patch.provider);
     }

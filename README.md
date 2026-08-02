@@ -97,8 +97,8 @@ cue uses **your own** API key, so it's free to run (you only pay your AI provide
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | One key does everything — **but** for the *listening* features the key must have **Whisper / audio** access (a "restricted" project key that only allows chat will give a 403 on transcription). |
 | **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | Great for screen & coding help. Claude has no speech-to-text, so add an OpenAI or Gemini key too if you want the listening features. |
 | **Google Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | One key does chat + transcription. |
+| **Groq** | [console.groq.com/keys](https://console.groq.com/keys) | One key powers both chat (Llama models) and transcription (Whisper). Ultra-fast inference. |
 | **AssemblyAI** | [assemblyai.com/dashboard](https://www.assemblyai.com/dashboard/account) | Real-time streaming transcription via v3 WebSocket API. Set Transport to "AssemblyAI (cloud streaming)" in Settings → Transcription. |
-| **Groq** | [console.groq.com/keys](https://console.groq.com/keys) | Fast batch transcription via OpenAI-compatible endpoint. Uses Whisper models with Groq's accelerated inference. |
 
 Your key is stored **only on your computer** (in `cue-data.json`) and is sent **only** to that provider. cue has no server and collects nothing.
 
@@ -127,6 +127,20 @@ Prefer to keep everything on your machine? cue can talk to a **local [Ollama](ht
 3. If your server isn't at the default, set **Ollama base URL** to its `/v1` endpoint (default `http://localhost:11434/v1`).
 
 > cue never auto-switches **to** Ollama — a running local server isn't guaranteed — so select it yourself. You can also set the base URL from your `.env` via `CUE_OLLAMA_BASE_URL`. Transcription works without any cloud key if you use the **local faster-whisper** engine (above); otherwise Ollama is chat-only, same as Anthropic, and you'll need an OpenAI or Gemini key for listening.
+
+## Use OmniRoute (free AI gateway)
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) is a free, open-source AI gateway that runs locally and routes to **290+ providers** with automatic fallback — no API key needed for the free tier. One endpoint powers both chat and transcription.
+
+1. **Install & start OmniRoute**:
+   ```bash
+   npm i -g omniroute
+   omniroute                      # starts on http://localhost:20128/v1
+   ```
+2. In cue **Settings** (`⌘` `,`), pick the **OmniRoute** provider. No key is needed — the key field is disabled; cue validates the gateway is reachable before reporting it as ready.
+3. The default model is **`auto`** — OmniRoute picks the cheapest available provider for each request. You can set a specific model (e.g. `openai/gpt-4o`) in the Models tab.
+
+> cue detects OmniRoute's availability automatically via a background health check. If the gateway isn't running, OmniRoute shows as unavailable in Settings and won't be used until it's started.
 
 ---
 

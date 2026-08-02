@@ -329,7 +329,7 @@ test('validatePatch catches unknown STT provider', () => {
 
 test('validatePatch accepts valid STT providers', () => {
   const { validatePatch } = require('../src/store');
-  for (const p of ['auto', 'batch', 'faster-whisper', 'funasr', 'assemblyai', 'deepgram', 'openai', 'groq', 'gemini', 'external-ws']) {
+  for (const p of ['auto', 'batch', 'faster-whisper', 'funasr', 'assemblyai', 'deepgram', 'openai', 'groq', 'gemini', 'external-ws', 'ollama', 'omni']) {
     const errors = validatePatch({ stt: { provider: p } });
     assert.ok(!errors.some((e) => e.includes('STT provider')), p + ' should be valid');
   }
@@ -343,7 +343,7 @@ test('validatePatch catches unknown LLM provider', () => {
 
 test('validatePatch accepts valid LLM providers', () => {
   const { validatePatch } = require('../src/store');
-  for (const p of ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama']) {
+  for (const p of ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama', 'groq', 'omni']) {
     const errors = validatePatch({ provider: p });
     assert.ok(!errors.some((e) => e.includes('LLM provider')), p + ' should be valid');
   }

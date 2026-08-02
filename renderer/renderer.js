@@ -543,6 +543,7 @@
     $('#key-assemblyai').value = settings.apiKeys.assemblyai || '';
     $('#key-groq').value = settings.apiKeys.groq || '';
     $('#key-deepgram').value = settings.apiKeys.deepgram || '';
+    $('#key-omni').value = settings.apiKeys.omni || '';
     $('#ollama-baseurl').value = (settings.ollama && settings.ollama.baseURL) || '';
     $('#resume-context').value = settings.resumeContext || '';
     // Assistant style: read the live promptOverrides.prePrompt home (the legacy top-level
@@ -575,7 +576,7 @@
     const k = settings.apiKeys;
     // Ollama has no real key (apiKeys.ollama is a non-empty sentinel), so it is never listed
     // under "keys: …". The "Active: <provider>" prefix already shows it when selected.
-    const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia'].filter(Boolean);
+    const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia', k.groq && 'Groq'].filter(Boolean);
     const sttDesc = sttProviderList.find((p) => p.id === (settings.stt && settings.stt.provider)) || {};
     const stt = sttDesc.displayName || (settings.stt && settings.stt.provider) || 'none';
     return 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') + ' · transcription: ' + stt;
@@ -614,6 +615,7 @@
     settings.apiKeys.assemblyai = $('#key-assemblyai').value.trim();
     settings.apiKeys.groq = $('#key-groq').value.trim();
     settings.apiKeys.deepgram = $('#key-deepgram').value.trim();
+    settings.apiKeys.omni = $('#key-omni').value.trim();
     settings.ollama = { baseURL: $('#ollama-baseurl').value.trim() };
     settings.resumeContext = $('#resume-context').value.trim();
     // Pre-prompt: write the live promptOverrides.prePrompt home (the only override composeSystem

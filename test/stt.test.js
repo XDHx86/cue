@@ -34,7 +34,7 @@ test('createSTT puts faster-whisper first when the manager is ready, before clou
     { manager: fakeManager() },
   );
   assert.equal(stt.available, true);
-  assert.deepEqual(stt.providers, ['faster-whisper', 'openai', 'gemini']);
+  assert.deepEqual(stt.providers, ['faster-whisper', 'openai', 'gemini', 'ollama']);
 });
 
 test('createSTT omits faster-whisper when no manager is wired (cloud-only)', () => {
@@ -99,7 +99,8 @@ test('transcribe returns an error (no cloud fallback) when the local provider th
   const res = await stt.transcribe(Buffer.alloc(4096));
 
   assert.equal(res.text, '');
-  assert.equal(res.error.provider, 'faster-whisper');
+  // Both faster-whisper and ollama (same manager) fail — ollama is tried last (order 50)
+  assert.equal(res.error.provider, 'ollama');
   assert.match(res.error.message, /rpc boom/);
 });
 
