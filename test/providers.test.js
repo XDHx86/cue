@@ -90,12 +90,16 @@ test('every LLM descriptor validates and has a render-safe, function-bearing cre
 test('capabilities match the pre-refactor LLM switch (all stream + vision where supported)', () => {
   loadReal();
   for (const d of registry.listProviders('llm')) {
-    assert.equal(d.capabilities.streaming, true, d.id + ' streams');
+    // R3: capabilities are now rich schema { state, source, confidence } — truthy means supported
+    const streaming = d.capabilities.streaming;
+    assert.ok(streaming && (streaming.state === 'supported' || streaming === true), d.id + ' streams');
     // Groq LLM has no vision support (Llama models don't accept image input); all others do.
     if (d.id === 'groq') {
-      assert.equal(d.capabilities.vision, false, d.id + ' does not support vision');
+      const vision = d.capabilities.vision;
+      assert.ok(!vision || vision.state === 'unsupported', d.id + ' does not support vision');
     } else {
-      assert.equal(d.capabilities.vision, true, d.id + ' vision (image input)');
+      const vision = d.capabilities.vision;
+      assert.ok(vision && (vision.state === 'supported' || vision === true), d.id + ' vision (image input)');
     }
   }
 });

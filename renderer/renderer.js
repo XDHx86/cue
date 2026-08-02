@@ -31,6 +31,8 @@
   let rafId = 0;
   let assistShortcut = DEFAULT_ASSIST_SHORTCUT;
   let recordingShortcut = false;
+  let _providerSpec = null;   // { llm: [...], stt: [...] } from providers:spec
+  let _providerFields = [];  // configurableSettings for the active provider
 
   const messages = $('#messages');
 
@@ -534,17 +536,206 @@
     document.querySelectorAll('#settings .s-page').forEach((p) => p.classList.toggle('active', p.dataset.tab === tab));
   });
 
+  // ---- R3 dynamic provider UI -----------------------------------------------
+  // Build a field HTML element from a configurableSettings entry.
+  // Supports: secret (password), text, boolean (checkbox), number, select, seg.
+  // Each field carries settingsPath for fill/save via resolvePath/setPath.
+  function providerFieldHtml(field) {
+    const id = 'pf-' + field.id;
+    const hintHtml = field.hint
+      ? '<div class="s-hint" style="margin:-6px 0 8px 90px;font-size:11px;opacity:0.7;">' + esc(field.hint) + '</div>'
+      : '';
+    if (field.type === 'secret') {
+      return '<div class="s-field"><span>' + esc(field.label) + '</span>'
+        + '<input id="' + id + '" type="password" placeholder="' + esc(field.placeholder || '') + '" autocomplete="off"'
+        + ' data-settings-path="' + esc(field.settingsPath || '') + '" /></div>' + hintHtml;
+    }
+    if (field.type === 'select') {
+      const opts = (field.options || []).map((o) =>
+        '<option value="' + esc(o.id) + '">' + esc(o.label || o.id) + '</option>'
+      ).join('');
+      return '<div class="s-field"><span>' + esc(field.label) + '</span>'
+        + '<select id="' + id + '" class="s-select" data-settings-path="' + esc(field.settingsPath || '') + '">'
+        + opts + '</select></div>' + hintHtml;
+    }
+    if (field.type === 'boolean') {
+      return '<div class="s-field"><span>' + esc(field.label) + '</span>'
+        + '<input id="' + id + '" type="checkbox" data-settings-path="' + esc(field.settingsPath || '') + '" />'
+        + '</div>' + hintHtml;
+    }
+    if (field.type === 'number') {
+      return '<div class="s-field"><span>' + esc(field.label) + '</span>'
+        + '<input id="' + id + '" type="number" placeholder="' + esc(field.placeholder || '') + '" autocomplete="off"'
+        + ' data-settings-path="' + esc(field.settingsPath || '') + '" /></div>' + hintHtml;
+    }
+    // text (default)
+    return '<div class="s-field"><span>' + esc(field.label) + '</span>'
+      + '<input id="' + id + '" type="text" placeholder="' + esc(field.placeholder || '') + '" autocomplete="off"'
+      + ' data-settings-path="' + esc(field.settingsPath || '') + '" /></div>' + hintHtml;
+  }
+
+  // Resolve a dotted path like 'apiKeys.openai' against an object.
+  function resolvePath(obj, dottedPath) {
+    if (!dottedPath || !obj) return undefined;
+    const keys = dottedPath.split('.');
+    let node = obj;
+    for (const k of keys) {
+      if (node == null || typeof node !== 'object') return undefined;
+      node = node[k];
+    }
+    return node;
+  }
+
+  // Set a value at a dotted path in an object, creating intermediate objects as needed.
+  function setPath(obj, dottedPath, value) {
+    if (!dottedPath || !obj) return;
+    const keys = dottedPath.split('.');
+    let node = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (node[keys[i]] == null || typeof node[keys[i]] !== 'object') node[keys[i]] = {};
+      node = node[keys[i]];
+    }
+    node[keys[keys.length - 1]] = value;
+  }
+
+  // Fill all dynamic provider fields from settings.
+  function fillProviderFields(fields) {
+    if (!fields || !settings) return;
+    for (const f of fields) {
+      const el = document.getElementById('pf-' + f.id);
+      if (!el) continue;
+      if (!f.settingsPath) continue;
+      const val = resolvePath(settings, f.settingsPath);
+      if (f.type === 'boolean') {
+        el.checked = !!val;
+      } else {
+        el.value = (val != null) ? val : '';
+      }
+    }
+  }
+
+  // Save all dynamic provider fields back to settings.
+  function saveProviderFields(fields) {
+    if (!fields || !settings) return;
+    for (const f of fields) {
+      const el = document.getElementById('pf-' + f.id);
+      if (!el || !f.settingsPath) continue;
+      if (f.type === 'boolean') {
+        setPath(settings, f.settingsPath, !!el.checked);
+      } else {
+        setPath(settings, f.settingsPath, el.value.trim());
+      }
+    }
+  }
+
+  // Build the provider UI from the spec (provider buttons + config fields).
+  function rebuildProviderUI(spec) {
+    if (!spec) return;
+    _providerSpec = spec;
+    const seg = $('#provider-seg');
+    const fields = $('#provider-fields');
+
+    // Build provider buttons from LLM spec, sorted by order
+    const llm = (spec.llm || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    seg.innerHTML = llm.map((p) =>
+      '<button data-provider="' + esc(p.id) + '" class="' + (p.id === settings.provider ? 'on' : '') + '">'
+      + esc(p.displayName) + '</button>'
+    ).join('');
+
+    // Build fields for the active provider
+    const active = llm.find((p) => p.id === settings.provider) || llm[0];
+    if (active && active.configurableSettings) {
+      const configFields = active.configurableSettings.filter((f) => f.group !== 'models');
+      _providerFields = configFields;
+      fields.innerHTML = '<label class="s-label">' + esc(active.displayName)
+        + ' settings <span class="s-hint">stored locally in cue-data.json</span></label>'
+        + configFields.map(providerFieldHtml).join('');
+      fillProviderFields(configFields);
+    } else {
+      fields.innerHTML = '';
+      _providerFields = [];
+    }
+
+    // Wire provider button click handlers
+    seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      settings.provider = b.dataset.provider;
+      seg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      // Rebuild fields for the newly selected provider
+      const newActive = llm.find((p) => p.id === settings.provider);
+      if (newActive && newActive.configurableSettings) {
+        const configFields = newActive.configurableSettings.filter((f) => f.group !== 'models');
+        _providerFields = configFields;
+        fields.innerHTML = '<label class="s-label">' + esc(newActive.displayName)
+          + ' settings <span class="s-hint">stored locally in cue-data.json</span></label>'
+          + configFields.map(providerFieldHtml).join('');
+        fillProviderFields(configFields);
+      } else {
+        fields.innerHTML = '';
+        _providerFields = [];
+      }
+      // Update model fields if they exist in the Models tab
+      const modelFields = (newActive && newActive.configurableSettings || []).filter((f) => f.group === 'models');
+      for (const mf of modelFields) {
+        const el = document.getElementById('mf-' + mf.id);
+        if (el && mf.settingsPath) el.value = resolvePath(settings, mf.settingsPath) || '';
+      }
+      $('#s-status').textContent = statusText();
+    }));
+
+    // Build model fields in the Models tab from the active provider's 'models' group
+    if (active && active.configurableSettings) {
+      const modelFields = active.configurableSettings.filter((f) => f.group === 'models');
+      const modelsContainer = document.querySelector('.s-page[data-tab="models"] .s-label');
+      if (modelsContainer && modelFields.length > 0) {
+        // Find the existing #model-fast / #model-smart area and replace with dynamic fields
+        const existingModelFields = document.querySelector('#model-fast')?.closest('.s-field')?.parentElement;
+        if (existingModelFields) {
+          const modelHtml = modelFields.map((f) =>
+            '<div class="s-field"><span>' + esc(f.label) + '</span>'
+            + '<input id="mf-' + esc(f.id) + '" type="text" autocomplete="off"'
+            + ' placeholder="' + esc(f.placeholder || '') + '"'
+            + ' data-settings-path="' + esc(f.settingsPath || '') + '" /></div>'
+          ).join('');
+          // Replace the fast/smart fields area
+          const fastField = $('#model-fast')?.closest('.s-field');
+          const smartField = $('#model-smart')?.closest('.s-field');
+          if (fastField && smartField) {
+            fastField.outerHTML = modelHtml;
+            smartField.remove(); // already replaced by the new html
+          }
+        }
+      }
+    }
+  }
+
+  // Update health badge on a provider button.
+  function updateHealthBadge(data) {
+    if (!data || !data.providerId) return;
+    const btn = document.querySelector('#provider-seg button[data-provider="' + data.providerId + '"]');
+    if (!btn) return;
+    const state = data.state;
+    btn.classList.toggle('healthy', state === 'healthy');
+    btn.classList.toggle('error', ['offline', 'unavailable', 'invalid_config'].includes(state));
+    btn.classList.toggle('warning', state === 'rate_limited');
+    btn.title = state || '';
+  }
+
+  // Show/hide the discovery progress indicator.
+  function updateDiscoveryIndicator(data) {
+    const el = $('#discovery-indicator');
+    if (!el) return;
+    if (!data || data.phase === 'complete' || data.phase === 'done') {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    el.textContent = 'Discovering providers… ' + (data.done || 0) + '/' + (data.total || '?');
+  }
+
   function fillSettings() {
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
-    $('#key-openai').value = settings.apiKeys.openai || '';
-    $('#key-anthropic').value = settings.apiKeys.anthropic || '';
-    $('#key-gemini').value = settings.apiKeys.gemini || '';
-    $('#key-nvidia').value = settings.apiKeys.nvidia || '';
-    $('#key-assemblyai').value = settings.apiKeys.assemblyai || '';
-    $('#key-groq').value = settings.apiKeys.groq || '';
-    $('#key-deepgram').value = settings.apiKeys.deepgram || '';
-    $('#key-omni').value = settings.apiKeys.omni || '';
-    $('#ollama-baseurl').value = (settings.ollama && settings.ollama.baseURL) || '';
+    // R3: fill dynamic provider fields via settingsPath
+    fillProviderFields(_providerFields);
     $('#resume-context').value = settings.resumeContext || '';
     // Assistant style: read the live promptOverrides.prePrompt home (the legacy top-level
     // prePrompt/prePromptTemplate were folded here by store.js on load — never read them). The
@@ -574,20 +765,24 @@
   });
   function statusText() {
     const k = settings.apiKeys;
-    // Ollama has no real key (apiKeys.ollama is a non-empty sentinel), so it is never listed
-    // under "keys: …". The "Active: <provider>" prefix already shows it when selected.
-    const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia', k.groq && 'Groq'].filter(Boolean);
-    const sttDesc = sttProviderList.find((p) => p.id === (settings.stt && settings.stt.provider)) || {};
+    // R3: derive the key list from the provider spec instead of hardcoding.
+    // Providers with skipAutoSwitch or a non-empty sentinel key are excluded from "keys: …".
+    const has = [];
+    if (_providerSpec && _providerSpec.llm) {
+      for (const p of _providerSpec.llm) {
+        if (p.skipAutoSwitch) continue; // ollama, omni — no real key
+        const keyField = (p.configurableSettings || []).find((f) => f.id === 'apiKey');
+        if (keyField && keyField.settingsPath) {
+          const val = resolvePath(settings, keyField.settingsPath);
+          if (val) has.push(p.displayName);
+        }
+      }
+    }
+    const sttDesc = sttProviderList.find((stP) => stP.id === (settings.stt && settings.stt.provider)) || {};
     const stt = sttDesc.displayName || (settings.stt && settings.stt.provider) || 'none';
     return 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') + ' · transcription: ' + stt;
   }
-  document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
-    settings.provider = b.dataset.provider;
-    document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
-    const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
-    $('#s-status').textContent = statusText();
-  }));
+  // R3: provider-seg click handler is now built dynamically in rebuildProviderUI()
   document.querySelectorAll('#preprompt-seg button').forEach((b) => b.addEventListener('click', () => {
     const pp = b.dataset.preprompt;
     document.querySelectorAll('#preprompt-seg button').forEach((x) => x.classList.toggle('on', x === b));
@@ -608,15 +803,8 @@
     }
   });
   async function saveSettings() {
-    settings.apiKeys.openai = $('#key-openai').value.trim();
-    settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
-    settings.apiKeys.gemini = $('#key-gemini').value.trim();
-    settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
-    settings.apiKeys.assemblyai = $('#key-assemblyai').value.trim();
-    settings.apiKeys.groq = $('#key-groq').value.trim();
-    settings.apiKeys.deepgram = $('#key-deepgram').value.trim();
-    settings.apiKeys.omni = $('#key-omni').value.trim();
-    settings.ollama = { baseURL: $('#ollama-baseurl').value.trim() };
+    // R3: save dynamic provider fields via settingsPath
+    saveProviderFields(_providerFields);
     settings.resumeContext = $('#resume-context').value.trim();
     // Pre-prompt: write the live promptOverrides.prePrompt home (the only override composeSystem
     // reads); the legacy top-level keys are no longer touched.
@@ -1025,6 +1213,20 @@
     assistShortcut = (settings.shortcuts && settings.shortcuts.assist) || DEFAULT_ASSIST_SHORTCUT;
     syncAssistShortcutLabels();
     smartBtn.classList.toggle('on', !!settings.smart);
+
+    // R3: subscribe to discovery events for live UI updates (event-driven IPC).
+    // These fire when the main process discovers models, updates health, etc.
+    cue.on('providers:spec:push', (data) => { rebuildProviderUI(data); fillSettings(); });
+    cue.on('health:update', (data) => { updateHealthBadge(data); });
+    cue.on('discovery:progress', (data) => { updateDiscoveryIndicator(data); });
+    cue.on('models:update', (data) => { /* model list updated — could refresh model selects */ });
+
+    // R3: fetch provider spec (buttons + fields built dynamically from registry).
+    try {
+      const spec = await cue.providersSpec();
+      rebuildProviderUI(spec);
+    } catch { /* spec unavailable — degrade gracefully; provider buttons remain empty */ }
+
     await buildSchemaFields();
     showExample();
     syncPlaceholder();

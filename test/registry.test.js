@@ -92,7 +92,8 @@ test('renderSafe strips function values (JSON-safe for the renderer IPC)', () =>
   const safe = registry.renderSafe(registry.getProvider('llm', 'a'));
   assert.equal(typeof safe.createEngine, 'undefined');
   assert.equal(typeof safe.streamSession, 'undefined');
-  assert.deepEqual(safe.capabilities, { streaming: true });
+  // R3: capabilities are now normalized to rich schema { state, source, confidence }
+  assert.deepEqual(safe.capabilities, { streaming: { state: 'supported', source: 'declared', confidence: 1 } });
   assert.equal(safe.supportedModels.length, 2);
   assert.ok(JSON.stringify(safe)); // must serialize
 });

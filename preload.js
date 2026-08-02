@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('cue', {
   sttModelDelete: (model) => ipcRenderer.invoke('stt:model:delete', model),
   sttEngineList: () => ipcRenderer.invoke('stt:engine:list'),
   sttProvidersList: () => ipcRenderer.invoke('stt:providers'),
+  // R3 unified provider discovery — returns both LLM and STT provider specs.
+  // The renderer fetches once on boot and subscribes to push events for live updates.
+  providersSpec: () => ipcRenderer.invoke('providers:spec'),
   // Assistant-style seg ↔ settings.promptOverrides.prePrompt shaping (src/preprompt.js). Sync,
   // pure — no IPC round-trip. The renderer has no Node `require`, so this is how it reaches the
   // same canonical helper main's composeSystem resolves with (resolveField('prePrompt')).
@@ -39,7 +42,8 @@ contextBridge.exposeInMainWorld('cue', {
     // Three legs (preload allowlist + main handler + renderer consumer) per .claude/docs/
     // conventions.md. stt:progress carries venv-install / model-download phases + a 'done'
     // nudge so the Settings panel refreshes its diagnostics after a download/delete.
-    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'transcript:partial', 'stt:status', 'stt:progress'];
+    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'transcript:partial', 'stt:status', 'stt:progress',
+      'providers:spec:push', 'models:update', 'models:selected', 'health:update', 'discovery:progress', 'capabilities:update'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }

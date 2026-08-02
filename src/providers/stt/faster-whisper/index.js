@@ -1,43 +1,47 @@
 // Local managed faster-whisper STT provider — batch + streaming via the managed Python service.
-// Self-describing descriptor: declare id/capabilities/supportedModels/configurableSettings/
-// defaultSettings, then createEngine returns { provider, ready, transcribe(wav) } and
-// createStreamSession returns a LocalFasterWhisperSession.
-//
-// The batch transcribe path reuses the SAME process manager + JSON-RPC client (src/stt-process.js)
-// as the streaming engine and calls the service's `transcribe` method directly over stdin/stdout.
-// No HTTP server, no fasterWhisperURL — the obsolete HTTP batch path (POST WAV to /transcribe)
-// is gone; the fasterWhisperURL field now only selects the EXTERNAL user-run WS server in the
-// external-ws provider.
-//
-// supportedModels scans the HuggingFace hub cache (scanCachedModels) so Settings can show
-// cached/downloaded flags before the Python service has even started.
+// Plugin descriptor with rich capabilities (including local), settingsPath.
+// R3 migration: definePlugin.
 
-const { defineProvider } = require('../../../registry');
+const { definePlugin } = require('../../core');
 const { LocalFasterWhisperSession, localLoadParams, MODEL_LOAD_TIMEOUT_MS } = require('../../../stt-engine');
 const { scanCachedModels, STT_MODEL_SIZES } = require('../../../stt-models');
 
 const LOCAL_TRANSCRIBE_TIMEOUT_MS = 30000;
 
-defineProvider({
+definePlugin({
   id: 'faster-whisper',
   displayName: 'faster-whisper (local)',
   description: 'Local faster-whisper engine via managed Python service (batch + streaming).',
   providerType: 'stt',
   order: 10,
-  capabilities: { streaming: true, batch: true, local: true },
+  capabilities: {
+    streaming: { state: 'supported', source: 'declared' },
+    batch: { state: 'supported', source: 'declared' },
+    local: { state: 'supported', source: 'declared' },
+  },
   supportedModels: (ctx) => scanCachedModels(ctx.modelsDir, ctx.fs),
   modelSettingsPath: 'stt.local.model',
+  healthCheck: async () => {
+    // Health is determined by the managed engine's venv state, checked by the engine.
+    return { state: 'healthy' };
+  },
+  healthConfig: { intervalMs: 60000, timeoutMs: 5000 },
   configurableSettings: [
     { id: 'model', label: 'Model', type: 'select',
-      options: STT_MODEL_SIZES.map((s) => ({ id: s, label: s })), placeholder: 'small' },
+      options: STT_MODEL_SIZES.map((s) => ({ id: s, label: s })), placeholder: 'small',
+      settingsPath: 'stt.local.model', group: 'config' },
     { id: 'device', label: 'Device', type: 'select',
-      options: [{ id: 'auto', label: 'auto' }, { id: 'cpu', label: 'cpu' }, { id: 'cuda', label: 'cuda' }] },
+      options: [{ id: 'auto', label: 'auto' }, { id: 'cpu', label: 'cpu' }, { id: 'cuda', label: 'cuda' }],
+      settingsPath: 'stt.local.device', group: 'config' },
     { id: 'computeType', label: 'Compute type', type: 'select',
       options: [{ id: 'int8', label: 'int8' }, { id: 'int8_float16', label: 'int8_float16' },
                 { id: 'float16', label: 'float16' }, { id: 'float32', label: 'float32' },
-                { id: 'auto', label: 'auto' }] },
-    { id: 'language', label: 'Language', type: 'text', placeholder: 'auto-detect' },
-    { id: 'vad', label: 'VAD filtering', type: 'boolean' },
+                { id: 'auto', label: 'auto' }],
+      settingsPath: 'stt.local.computeType', group: 'config' },
+    { id: 'language', label: 'Language', type: 'text', placeholder: 'auto-detect',
+      settingsPath: 'stt.local.language', group: 'config' },
+    { id: 'vad', label: 'VAD filtering', type: 'boolean',
+      settingsPath: 'stt.local.vad', group: 'config' },
   ],
   defaultSettings: {
     stt: {

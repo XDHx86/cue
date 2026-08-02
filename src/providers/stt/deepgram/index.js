@@ -1,24 +1,19 @@
 // Deepgram STT provider — streaming (WebSocket) and batch (REST API).
-// Self-describing descriptor: declare id/capabilities/supportedModels/configurableSettings/
-// defaultSettings, streamingReady for the streaming resolver, and createStreamSession.
-// Both streaming and batch are supported (the batch path falls through the createSTT chain
-// in src/stt.js).
-//
-// No SDK dependency — hand-rolled WebSocket using WsClient from ../external-ws/session.js
-// for streaming, and Node global fetch for batch (POST /v1/listen with raw WAV body).
-// Deepgram API: https://api.deepgram.com/v1/listen
-// Auth: Authorization: Token <key>
-// Streaming: wss://api.deepgram.com/v1/listen — binary Int16 PCM → JSON text responses.
+// Plugin descriptor with rich capabilities, settingsPath. R3 migration: definePlugin.
+// No SDK dependency — hand-rolled WebSocket + Node fetch.
 
-const { defineProvider } = require('../../../registry');
+const { definePlugin } = require('../../core');
 
-defineProvider({
+definePlugin({
   id: 'deepgram',
   displayName: 'Deepgram',
   description: 'Deepgram speech-to-text (streaming WebSocket + batch REST API).',
   providerType: 'stt',
-  order: 17, // between assemblyai (15, streaming-only) and openai (20, batch-only)
-  capabilities: { streaming: true, batch: true },
+  order: 17,
+  capabilities: {
+    streaming: { state: 'supported', source: 'declared' },
+    batch: { state: 'supported', source: 'declared' },
+  },
   modelSettingsPath: 'stt.deepgramModel',
   supportedModels: () => [
     { id: '', label: 'Default (Nova 3)' },
@@ -32,8 +27,14 @@ defineProvider({
     { id: 'enhanced', label: 'Enhanced' },
     { id: 'base', label: 'Base' },
   ],
+  healthCheck: async ({ apiKey }) => {
+    if (!apiKey) return { state: 'invalid_config', reason: 'No API key' };
+    return { state: 'healthy' };
+  },
+  healthConfig: { intervalMs: 600000, timeoutMs: 5000 },
   configurableSettings: [
-    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'Deepgram API key' },
+    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'Deepgram API key',
+      settingsPath: 'apiKeys.deepgram', group: 'config' },
     { id: 'model', label: 'Model', type: 'select',
       options: [
         { id: '', label: 'Default (Nova 3)' },
@@ -45,17 +46,23 @@ defineProvider({
         { id: 'nova-2-meeting', label: 'Nova 2 Meeting' },
         { id: 'enhanced', label: 'Enhanced' },
         { id: 'base', label: 'Base' },
-      ] },
+      ],
+      settingsPath: 'stt.deepgramModel', group: 'config' },
     { id: 'language', label: 'Language code', type: 'text', placeholder: 'en',
-      hint: 'BCP-47 language code (e.g. en, es, fr) for primary spoken language.' },
+      hint: 'BCP-47 language code (e.g. en, es, fr) for primary spoken language.',
+      settingsPath: 'stt.deepgramLanguage', group: 'config' },
     { id: 'smartFormat', label: 'Smart formatting', type: 'boolean',
-      hint: 'Apply formatting to transcript output for improved readability.' },
+      hint: 'Apply formatting to transcript output for improved readability.',
+      settingsPath: 'stt.deepgramSmartFormat', group: 'config' },
     { id: 'punctuate', label: 'Punctuation', type: 'boolean',
-      hint: 'Add punctuation and capitalization.' },
+      hint: 'Add punctuation and capitalization.',
+      settingsPath: 'stt.deepgramPunctuate', group: 'config' },
     { id: 'endpointingMs', label: 'Endpointing (ms)', type: 'number', placeholder: '300',
-      hint: 'Silence duration (ms) to detect end of speech.' },
+      hint: 'Silence duration (ms) to detect end of speech.',
+      settingsPath: 'stt.deepgramEndpointingMs', group: 'config' },
     { id: 'utteranceEndMs', label: 'Utterance end (ms)', type: 'number', placeholder: '1000',
-      hint: 'Longer silence threshold (ms) for utterance boundary.' },
+      hint: 'Longer silence threshold (ms) for utterance boundary.',
+      settingsPath: 'stt.deepgramUtteranceEndMs', group: 'config' },
   ],
   defaultSettings: {
     apiKeys: { deepgram: '' },
@@ -70,7 +77,7 @@ defineProvider({
     },
   },
 
-  // ---- batch engine (POST /v1/listen with raw WAV body) --------------------
+  // ---- batch engine ----
   createEngine({ settings }) {
     const apiKey = (settings.apiKeys || {}).deepgram;
     if (!apiKey) return { provider: 'deepgram', ready: false };
@@ -91,10 +98,7 @@ defineProvider({
         if (lang) url.searchParams.set('language', lang);
         const res = await fetch(url.toString(), {
           method: 'POST',
-          headers: {
-            'Authorization': 'Token ' + apiKey,
-            'Content-Type': 'audio/wav',
-          },
+          headers: { 'Authorization': 'Token ' + apiKey, 'Content-Type': 'audio/wav' },
           body: wav,
         });
         if (!res.ok) {
@@ -104,20 +108,19 @@ defineProvider({
           throw err;
         }
         const data = await res.json();
-        const ch = data.results && data.results.channels &&
-                   data.results.channels[0];
+        const ch = data.results && data.results.channels && data.results.channels[0];
         const alt = ch && ch.alternatives && ch.alternatives[0];
         return (alt && alt.transcript || '').trim();
       },
     };
   },
 
-  // ---- streaming readiness -------------------------------------------------
+  // ---- streaming readiness ----
   streamingReady(settings) {
     return !!(settings && settings.apiKeys && settings.apiKeys.deepgram);
   },
 
-  // ---- streaming session factory -------------------------------------------
+  // ---- streaming session factory ----
   createStreamSession({ settings, channel, language, onFinal, onPartial, onError, onStatus, log }) {
     const apiKey = settings && settings.apiKeys && settings.apiKeys.deepgram;
     if (!apiKey) return null;

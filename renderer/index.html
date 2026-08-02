@@ -72,32 +72,12 @@
           <button class="s-nav-btn" data-tab="advanced">Advanced</button>
         </nav>
         <div class="s-pages">
-          <!-- Providers -->
+          <!-- Providers — fully dynamic: buttons + fields built from providers:spec -->
           <section class="s-page active" data-tab="providers">
+            <div id="discovery-indicator" class="s-hint" style="display:none;color:#d97706;margin:8px 0;"></div>
             <label class="s-label">Provider</label>
-            <div class="s-seg" id="provider-seg">
-              <button data-provider="openai">OpenAI</button>
-              <button data-provider="anthropic">Anthropic</button>
-              <button data-provider="gemini">Gemini</button>
-              <button data-provider="groq">Groq</button>
-              <button data-provider="nvidia">Nvidia</button>
-              <button data-provider="omni">OmniRoute</button>
-              <button data-provider="ollama">Ollama</button>
-            </div>
-
-            <label class="s-label">API keys <span class="s-hint">stored locally in cue-data.json</span></label>
-            <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-            <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-            <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-            <div class="s-field"><span>Nvidia</span><input id="key-nvidia" type="password" placeholder="nvapi-..." autocomplete="off" /></div>
-            <div class="s-field"><span>Ollama</span><input id="key-ollama" type="password" placeholder="No key needed (local)" autocomplete="off" disabled /></div>
-            <div class="s-field"><span>OmniRoute</span><input id="key-omni" type="password" placeholder="No key needed (local)" autocomplete="off" disabled /></div>
-            <div class="s-field"><span>AssemblyAI</span><input id="key-assemblyai" type="password" placeholder="AssemblyAI API key" autocomplete="off" /></div>
-            <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
-            <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg_..." autocomplete="off" /></div>
-
-            <label class="s-label" for="ollama-baseurl">Ollama base URL <span class="s-hint">OpenAI-compatible /v1 endpoint of your local <code>ollama serve</code></span></label>
-            <div class="s-field"><span>URL</span><input id="ollama-baseurl" type="text" placeholder="http://localhost:11434/v1" autocomplete="off" /></div>
+            <div class="s-seg" id="provider-seg"></div>
+            <div id="provider-fields"></div>
           </section>
 
           <!-- Transcription (full STT block: master toggle → diagnostics) -->

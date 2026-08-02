@@ -86,8 +86,11 @@ boundary get a drift guard — `test/stt-models.test.js` asserts `STT_MODEL_SIZE
 - `store.setSettings(patch)` runs `validatePatch()`: schema `validate()` (coercive/clamping) plus
   advisory semantic checks (API key prefixes, provider ids). Advisory errors are logged, never
   blocking. Keep validation non-fatal — a bad key must not break saving.
-- STT/LLM provider ids are validated against the known set; when adding a provider, extend the
-  list in `validatePatch` and update `test/providers.test.js` (the STT-count assertion).
+- STT/LLM provider ids are validated against the **registry** (R3): `store.validatePatch()`
+  reads `registry.listProviders(type)` — no hardcoded list to maintain. When adding a provider,
+  just create the folder and `definePlugin()` call; validation, Settings UI, and auto-switch
+  candidates are all derived from the registry. Update `test/providers.test.js` if there is a
+  count assertion.
 
 ## Local STT — engine-agnostic seam
 

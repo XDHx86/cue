@@ -19,23 +19,25 @@ It is a compressed view — if it disagrees with a permanent file, that file win
 `cue` is a frameless, transparent, always-on-top Electron overlay (plain HTML/CSS/JS, no
 build step) that captures **screen + mic + meeting audio**, transcribes them as two
 end-to-end channels (`you` / `them`), and streams answers from a bring-your-own-key LLM
-(OpenAI / Anthropic / Gemini / Nvidia / **Ollama**). Everything runs locally except the
-provider call. Speech-to-text is **registry-driven**: STT providers live in folders under
-`src/providers/stt/<id>/index.js` and auto-register via `defineProvider`. Default transport
-is a **managed local faster-whisper** Python service (ADR-013) spawned by main; fallbacks
-are **AssemblyAI** (cloud streaming), external WebSocket server, and cloud batch
-(OpenAI Whisper / **Groq** / Gemini). The central invariant: **the three inputs stay
-separate and the channel tag preserves "who said what"** through transcript → prompt → render.
+(OpenAI / Anthropic / Gemini / Nvidia / Ollama / Groq / OmniRoute). Everything runs locally
+except the provider call. The provider system is **plugin-centric** (R3): all providers
+(LLM + STT, 17 total) live in folders under `src/providers/<type>/<id>/index.js`, self-describe
+via `definePlugin()` with rich capabilities, model discovery, health checks, and
+`configurableSettings` with `settingsPath`/`group`. A core discovery engine
+(`src/providers/core/`) orchestrates registration, model registry, health monitoring,
+caching, and IPC push events to the renderer. Speech-to-text is decoupled (ADR-002): the
+default transport is a **managed local faster-whisper** Python service (ADR-013) spawned by
+main; fallbacks are **AssemblyAI** (cloud streaming), **Deepgram** (streaming + batch),
+external WebSocket server, and cloud batch (OpenAI Whisper / Groq / Gemini / OmniRoute).
+The central invariant: **the three inputs stay separate and the channel tag preserves "who
+said what"** through transcript → prompt → render.
 
 ## Right now
-- Branch `main` with uncommitted session work. Recent: Groq STT provider, AssemblyAI
-  streaming provider, audio resampling safety net, graceful shutdown, settings validation,
-  Advanced-tab logging config. See [state.md](state.md) for the full list and `git status`.
-- **98/98 tests pass** across the touched suites (`test/providers.test.js`,
-  `test/assemblyai-provider.test.js`, `test/resample.test.js`, `test/store-defaults.test.js`,
-  `test/registry.test.js`, `test/stt-stream.test.js`).
-- **Next:** R3 — auto-generated provider Settings UI (renderer builds provider fields from
-  `configurableSettings`), then R4–R8.
+- Branch `main` with R3 plugin discovery system complete in the working tree (uncommitted).
+  Latest commit: `8b372c4 feat: add OmniRoute LLM and STT providers with local health checks`.
+  R3 introduced `src/providers/core/`, migrated all 17 providers to `definePlugin()`, removed
+  hardcoded provider/model lists, and added `providers:spec` IPC with push events.
+- **Next:** R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging config), R8 (docs compression).
 
 ## Where things live
 - Architecture & seams → [architecture.md](architecture.md) · Coding rules → [conventions.md](conventions.md)

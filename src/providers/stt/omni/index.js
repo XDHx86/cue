@@ -1,43 +1,49 @@
 // OmniRoute STT provider — batch transcription via the local OmniRoute AI gateway.
-// OmniRoute exposes a Whisper-compatible /v1/audio/transcriptions endpoint at its local URL
-// (default http://localhost:20128/v1), so we reuse the `openai` npm package with a custom
-// baseURL (same pattern as Groq STT).
-//
-// readiness: reflects ACTUAL OmniRoute gateway availability via local-health.js, not just
-// whether an API key is configured.
-//
-// Self-describing descriptor: declare id/capabilities/supportedModels/configurableSettings/
-// defaultSettings, then createEngine returns { provider, ready, transcribe(wav) }.
-// Lazy-requires the 'openai' SDK INSIDE transcribe so requiring this folder at load time
-// (the registry discovery pass) pulls no network SDK.
+// Plugin descriptor with rich capabilities (including local), settingsPath.
+// R3 migration: definePlugin.
 
-const { defineProvider } = require('../../../registry');
+const { definePlugin } = require('../../core');
 const localHealth = require('../../local-health');
 
 const DEFAULT_BASE_URL = 'http://localhost:20128/v1';
 
-defineProvider({
+definePlugin({
   id: 'omni',
   displayName: 'OmniRoute STT (local)',
   description: 'Local OmniRoute STT — Whisper-compatible batch transcription via the gateway.',
   providerType: 'stt',
-  order: 35, // after gemini (30), before external-ws (40)
-  capabilities: { batch: true, streaming: false },
+  order: 35,
+  capabilities: {
+    batch: { state: 'supported', source: 'declared' },
+    streaming: { state: 'unsupported', source: 'declared' },
+    local: { state: 'supported', source: 'declared' },
+  },
   modelSettingsPath: 'stt.omniModel',
   supportedModels: () => [
     { id: 'whisper-large-v3-turbo', label: 'Whisper Large v3 Turbo' },
     { id: 'whisper-large-v3', label: 'Whisper Large v3' },
   ],
+  healthCheck: async ({ baseURL }) => {
+    const url = (baseURL || 'http://localhost:20128') + '/v1/models';
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return { state: 'offline', reason: 'Server responded ' + res.status };
+      return { state: 'healthy' };
+    } catch {
+      return { state: 'offline', reason: 'Cannot reach OmniRoute gateway' };
+    }
+  },
+  healthConfig: { intervalMs: 60000, timeoutMs: 5000 },
   configurableSettings: [
-    { id: 'model', label: 'Model', type: 'text', placeholder: 'whisper-large-v3-turbo' },
-    { id: 'baseURL', label: 'Base URL', type: 'text', placeholder: DEFAULT_BASE_URL },
+    { id: 'model', label: 'Model', type: 'text', placeholder: 'whisper-large-v3-turbo', settingsPath: 'stt.omniModel', group: 'config' },
+    { id: 'baseURL', label: 'Base URL', type: 'text', placeholder: DEFAULT_BASE_URL, settingsPath: 'omniroute.baseURL', group: 'config' },
   ],
   defaultSettings: {
     stt: { omniModel: 'whisper-large-v3-turbo' },
     omniroute: { baseURL: '' },
   },
   createEngine({ settings }) {
-    const apiKey = 'omniroute'; // sentinel — OmniRoute ignores it for free tier
+    const apiKey = 'omniroute';
     const baseURL = (settings.omniroute && settings.omniroute.baseURL) || DEFAULT_BASE_URL;
     const model = (settings.stt && settings.stt.omniModel) || 'whisper-large-v3-turbo';
     return {

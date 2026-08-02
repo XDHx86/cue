@@ -176,9 +176,13 @@ function load() {
   }
 
   // Auto-switch provider if the current one has no key, but another one does.
+  // R3: derive candidate list from the registry — providers with skipAutoSwitch (ollama, omni)
+  // are excluded so the user is never auto-switched to a local provider with a sentinel key.
   if (!data.apiKeys[data.provider]) {
-    const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia', 'groq'];
-    const active = validProviders.find(p => data.apiKeys[p]);
+    const candidates = registry.listProviders('llm')
+      .filter(d => !d.skipAutoSwitch)
+      .map(d => d.id);
+    const active = candidates.find(p => data.apiKeys[p]);
     if (active) {
       data.provider = active;
       // We don't save() here so we don't spam disk, it will persist on next save.
@@ -241,9 +245,9 @@ function validatePatch(patch) {
     }
   }
 
-  // LLM provider validation
+  // LLM provider validation — R3: derived from the registry (no hardcoded list)
   if (patch.provider) {
-    const validLlm = ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama', 'groq', 'omni'];
+    const validLlm = registry.listProviders('llm').map(d => d.id);
     if (!validLlm.includes(patch.provider)) {
       errors.push('Unknown LLM provider: ' + patch.provider);
     }

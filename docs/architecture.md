@@ -10,8 +10,9 @@ different questions, so they overlap in code but not in prose.
 `cue` is an [Electron](https://www.electronjs.org/) overlay: a frameless, transparent,
 always-on-top window that floats over everything else, captures **screen + mic + meeting
 audio**, transcribes the audio, and streams answers from a bring-your-own-key LLM. Everything
-runs locally except the call to the user's chosen provider (OpenAI, Anthropic, Google Gemini,
-Nvidia, or a local Ollama). There is no server and no telemetry.
+runs locally except the call to your chosen provider (OpenAI, Anthropic, Google Gemini,
+Nvidia, Ollama, Groq, or OmniRoute — a local AI gateway routing to 290+ providers).
+There is no server and no telemetry.
 
 The whole app is plain HTML/CSS/JS — no build step, no bundler, no TypeScript, no native
 modules by design. Sources ship unpacked (`asar: false`).
@@ -65,15 +66,21 @@ Finals push into the **ring-buffered** transcript in [`src/transcript.js`](../sr
 streaming partial, and `lastSummarizedTs` is the rolling-summary watermark. The turn shape
 `{ channel, text, ts }` is preserved so prompt formatting is unchanged.
 
-## Provider abstraction — LLM and STT are decoupled
+## Provider abstraction — LLM and STT are decoupled, plugin-centric (R3)
 
-- **LLM** — [`src/llm.js`](../src/llm.js): `createLLM(settings)` returns one
-  `{ stream({ system, turns, imageDataUrl, onToken }) }` interface over OpenAI, Anthropic, and
-  Gemini. **Nvidia and Ollama reuse the OpenAI SDK with a different `baseURL`** (a local Ollama
-  needs no real key — a non-empty sentinel is used). Each provider's `streamX` attaches the
-  optional screenshot to the last user turn differently; `maxTokens` is pinned to 4096
-  ("effectively unlimited") because the Anthropic SDK requires a value.
-- **Speech-to-text** — registry-driven providers behind one engine-agnostic seam:
+Both LLM and STT providers use the same **plugin contract** (R3): each lives in its own folder
+under `src/providers/<type>/<id>/index.js` and self-describes via `definePlugin()` with rich
+capabilities, `configurableSettings` with `settingsPath`/`group`, and `createEngine`. A core
+discovery engine (`src/providers/core/`) orchestrates registration, model discovery, health
+monitoring, caching, and push events to the renderer over IPC.
+
+- **LLM** — [`src/llm.js`](../src/llm.js): `createLLM(settings)` is a one-line delegate to
+  the registry. Seven LLM providers (OpenAI, Anthropic, Gemini, Nvidia, Ollama, Groq, OmniRoute)
+  each live in `src/providers/llm/<id>/index.js`. Nvidia and Ollama reuse the OpenAI SDK via
+  `baseURL` (ADR-005); Ollama uses a sentinel key. OmniRoute is a local AI gateway
+  (`localhost:20128/v1`) routing across 290+ providers with no API key needed. `maxTokens`
+  pinned to 4096 (Anthropic SDK requires a value).
+- **Speech-to-text** — plugin-driven providers behind one engine-agnostic seam:
   - **Batch (cloud)** — [`src/stt.js`](../src/stt.js) `createSTT(settings)`, a separate factory
     (Anthropic has no audio API); a fallback chain over audio-capable providers (local
     faster-whisper → OpenAI Whisper → Groq → Gemini) with a `sttDisabled` latch on
@@ -93,6 +100,8 @@ streaming partial, and `lastSummarizedTs` is the rolling-summary watermark. The 
 - **Routing** — [`src/stt-stream.js`](../src/stt-stream.js) `resolveProvider` picks `auto` → local
   (when its venv is ready) → AssemblyAI (if a key is set) → external WS URL → null/batch, or
   `local`/`assemblyai`/`faster-whisper`/`batch` forced (explicit names match by provider id).
+  **Ollama STT** delegates to the managed faster-whisper engine (same manager, different id);
+  **OmniRoute STT** uses the local gateway (`localhost:20128/v1`).
   CLIs: `npm run stt:setup|status|models|download|delete`. See
   [faster-whisper-setup.md](faster-whisper-setup.md).
 
@@ -139,8 +148,13 @@ main process ──┬─ overlay window (frameless, transparent, always-on-top,
                ├─ screenshot capture (desktopCapturer)
                ├─ speech-to-text ┬ managed local faster-whisper (spawns a Python service,
                │                  │  JSON-RPC over stdin/stdout)   ── "you" + "them" channels
-               │                  └ external WS server / cloud Whisper-Gemini fallback
-               └─ LLM streaming (OpenAI / Anthropic / Gemini / Nvidia / Ollama)
+               │                  ├ AssemblyAI (v3 WebSocket, cloud streaming)
+               │                  ├ Deepgram (WebSocket + batch, cloud)
+               │                  ├ Ollama / OmniRoute STT (local engines)
+               │                  └ cloud Whisper / Groq / Gemini batch fallback
+               ├─ LLM streaming (OpenAI / Anthropic / Gemini / Nvidia / Ollama / Groq / OmniRoute)
+               └─ provider discovery core (src/providers/core/) — EventBus, ProviderRegistry,
+                  ModelRegistry, HealthMonitor, CacheManager, DiscoveryEngine; IPC push to renderer
 renderer ──────┴─ the glass UI + mic capture + system-audio loopback
                         (getUserMedia / getDisplayMedia → pcm-processor → IPC)
 ```

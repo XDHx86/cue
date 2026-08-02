@@ -16,9 +16,20 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 *next*; it is not a transcript.
 
 ## Branch
-- `main` — latest commit: `d04ad29 feat: add external WebSocket STT provider and local faster-whisper support`.
+- `main` — latest commit: `8b372c4 feat: add OmniRoute LLM and STT providers with local health checks`.
+  R3 plugin discovery system complete in working tree (uncommitted).
 
 ## Completed (this session)
+- **R3 — Plugin-centric Provider & Model Discovery System.** Full discovery architecture
+  under `src/providers/core/` (EventBus, Model, CapabilityRegistry, CacheManager,
+  PluginInterface, ProviderRegistry, ModelRegistry, HealthMonitor, DiscoveryEngine,
+  7 normalization adapters). All 17 providers migrated to `definePlugin()` with rich
+  capabilities, `settingsPath`, `group`, `skipAutoSwitch`. Hardcoded provider/model
+  lists eliminated from store.js, renderer/index.html, renderer/renderer.js. New IPC
+  channels: `providers:spec`, `providers:spec:push`, `models:update`, `health:update`,
+  `discovery:progress`, `capabilities:update`. Renderer builds provider UI dynamically
+  from spec. 88 tests pass across 4 test files. `src/registry.js` is a backward-compat
+  facade delegating to core singletons.
 - **Groq LLM provider.** New LLM provider at `src/providers/llm/groq/` (order 4). Reuses
   `makeOpenAICompatEngine` with `baseURL: https://api.groq.com/openai/v1`. Models: Llama 3.1
   8B Instant (fast), Llama 3.3 70B Versatile (smart). Same API key powers Groq STT.
@@ -70,9 +81,7 @@ Rewritten per session, not appended. **For live working-tree state run `git stat
 - Nothing mid-edit.
 
 ## Next
-1. **R3 — auto-generated provider Settings UI.** providers:spec IPC -> renderer builds provider
-   buttons + key/baseURL/model fields + provider-specific options from configurableSettings.
-2. Then R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging config), R8 (docs compression).
+1. R4 (shortcuts), R5 (prompts UI), R6 (popup), R7 (logging config), R8 (docs compression).
 
 ## Session discoveries
 - Real provider modules + `_resetProviders()`-between-cases are incompatible: Node caches a

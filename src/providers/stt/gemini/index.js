@@ -1,24 +1,30 @@
 // Gemini STT provider — batch transcription via generateContent.
-// Self-describing descriptor: declare id/capabilities/supportedModels/configurableSettings/
-// defaultSettings, then createEngine returns { provider, ready, transcribe(wav) }.
-// Lazy-requires the '@google/genai' SDK INSIDE transcribe so requiring this folder at load
-// time (the registry discovery pass) pulls no network SDK.
+// Plugin descriptor with rich capabilities, settingsPath. R3 migration: definePlugin.
+// Lazy-requires the '@google/genai' SDK INSIDE transcribe.
 
-const { defineProvider } = require('../../../registry');
+const { definePlugin } = require('../../core');
 
-defineProvider({
+definePlugin({
   id: 'gemini',
   displayName: 'Gemini',
   description: 'Google Gemini — batch speech-to-text via generateContent.',
   providerType: 'stt',
   order: 30,
-  capabilities: { batch: true, streaming: false },
+  capabilities: {
+    batch: { state: 'supported', source: 'declared' },
+    streaming: { state: 'unsupported', source: 'declared' },
+  },
   modelSettingsPath: null,
   supportedModels: () => [
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   ],
+  healthCheck: async ({ apiKey }) => {
+    if (!apiKey) return { state: 'invalid_config', reason: 'No API key' };
+    return { state: 'healthy' };
+  },
+  healthConfig: { intervalMs: 600000, timeoutMs: 5000 },
   configurableSettings: [
-    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'AIza...' },
+    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'AIza...', settingsPath: 'apiKeys.gemini', group: 'config' },
   ],
   defaultSettings: {
     apiKeys: { gemini: '' },

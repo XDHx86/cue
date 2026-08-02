@@ -1,21 +1,28 @@
 // External faster-whisper WebSocket server STT provider — streaming only.
-// Self-describing descriptor: declare id/capabilities/supportedModels/configurableSettings/
-// defaultSettings, streamingReady for the streaming resolver, and createStreamSession.
-// The batch engine is not supported (ready: false).
+// Plugin descriptor with rich capabilities, settingsPath. R3 migration: definePlugin.
 
-const { defineProvider } = require('../../../registry');
+const { definePlugin } = require('../../core');
 
-defineProvider({
+definePlugin({
   id: 'external-ws',
   displayName: 'External faster-whisper server',
   description: 'External faster-whisper WebSocket server (user-run, streaming only).',
   providerType: 'stt',
   order: 40,
-  capabilities: { streaming: true, batch: false },
+  capabilities: {
+    streaming: { state: 'supported', source: 'declared' },
+    batch: { state: 'unsupported', source: 'declared' },
+  },
   modelSettingsPath: null,
   supportedModels: () => null,
+  healthCheck: async ({ url }) => {
+    if (!url) return { state: 'invalid_config', reason: 'No URL configured' };
+    return { state: 'healthy' };
+  },
+  healthConfig: { intervalMs: 60000, timeoutMs: 5000 },
   configurableSettings: [
-    { id: 'url', label: 'WebSocket URL', type: 'text', placeholder: 'ws://localhost:9080' },
+    { id: 'url', label: 'WebSocket URL', type: 'text', placeholder: 'ws://localhost:9080',
+      settingsPath: 'stt.fasterWhisperURL', group: 'config' },
   ],
   defaultSettings: {
     stt: { fasterWhisperURL: '' },
@@ -31,10 +38,8 @@ defineProvider({
     if (!url) return null;
     const { FasterWhisperStreamSession } = require('./session');
     return new FasterWhisperStreamSession({
-      url,
-      language,
-      onFinal, onPartial, onError, onStatus,
-      log,
+      url, language,
+      onFinal, onPartial, onError, onStatus, log,
       maxConnectFailures: settings.stt && settings.stt.streamMaxConnectFailures,
       maxBackoffMs: settings.stt && settings.stt.streamMaxBackoffMs,
     });

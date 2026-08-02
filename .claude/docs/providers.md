@@ -11,13 +11,16 @@
 
 # providers — per-provider implementation notes
 
-How each LLM/STT provider is wired. LLM providers are registry-driven (ADR-017): each lives in
-its own folder under [src/providers/llm/](../../src/providers/llm/) and self-describes. STT remains
-on the legacy `src/stt.js` chain until R2. See [decisions.md](decisions.md) for rationale.
+How each LLM/STT provider is wired. All providers are plugin-centric (R3): each lives in
+its own folder under [src/providers/llm/](../../src/providers/llm/) or
+[src/providers/stt/](../../src/providers/stt/) and self-describes via `definePlugin()`.
+The plugin contract (src/providers/core/PluginInterface.js) covers capabilities (rich
+schema), model discovery, health checks, configurableSettings with settingsPath, and
+createEngine. See [decisions.md](decisions.md) for rationale.
 
 ## LLM — registry-driven (ADR-017)
 
-Each provider folder `src/providers/llm/<id>/index.js` calls `defineProvider`, declaring
+Each provider folder `src/providers/llm/<id>/index.js` calls `definePlugin`, declaring
 `capabilities`, `supportedModels`, `configurableSettings`, `defaultSettings` (folded into
 [src/store.js](../../src/store.js) DEFAULTS automatically), and `createEngine({settings})` which
 returns `{ provider, model, apiKey, ready, stream({system,turns,imageDataUrl,onToken}) }`.
@@ -34,9 +37,10 @@ returns `{ provider, model, apiKey, ready, stream({system,turns,imageDataUrl,onT
 | groq | [llm/groq/](../../src/providers/llm/groq/index.js) | `openai` + fixed `baseURL: https://api.groq.com/openai/v1`. Same API key powers Groq STT. Models: Llama 3.1 8B Instant (fast), Llama 3.3 70B Versatile (smart). No vision. |
 | omni | [llm/omni/](../../src/providers/llm/omni/index.js) | `openai` + local `baseURL: settings.omniroute.baseURL \|\| http://localhost:20128/v1`. **Sentinel `apiKey: 'omniroute'`**. Ready reflects actual gateway availability via `local-health.js` (periodic GET `/v1/models`). Model `auto` = free routing across 290+ providers. |
 
-**Adding a provider = one folder calling `defineProvider`.** No `src/llm.js` switch edit, no
-`DEFAULTS` slice, no Settings-UI edit (R3 auto-builds from `configurableSettings`); `defaultSettings`
-folds into the store automatically. OpenAI-compatible gateways share
+**Adding a provider = one folder calling `definePlugin`.** No `src/llm.js` switch edit, no
+`DEFAULTS` slice, no Settings-UI edit (R3 auto-builds from `configurableSettings` with
+`settingsPath` and `group`); `defaultSettings` folds into the store automatically.
+Capabilities use rich schema: `{ state, source, confidence }`. OpenAI-compatible gateways share
 [openai-compat.js](../../src/providers/llm/openai-compat.js) (the Ollama template for "no real key").
 Shared helpers (lazy `child('llm')` logger guard + `stripDataUrl`) live in
 [src/providers/llm/shared.js](../../src/providers/llm/shared.js), kept BELOW `src/llm.js` in the
@@ -54,8 +58,9 @@ attach correctly. Screenshots are JPEG-capped to a 1568-px longest edge with a 1
 ## STT — `createSTT(settings)` (decoupled, ADR-002)
 
 Anthropic has no audio API, so STT is a **separate** factory. It builds a fallback chain
-from audio-capable keys, **openai → gemini**, and falls across providers on error. A
-`sttDisabled` latch in [main.js](../../main.js) stops retry spam once the chain returns
+**local-first, then cloud** (faster-whisper → openai → groq → gemini, filtered by
+`capabilities.batch`), and falls across providers on error. A `sttDisabled` latch in
+[main.js](../../main.js) stops retry spam once the chain returns
 403/401/`model_not_found`; `settings:set` resets it.
 
 | Provider | Streaming | Batch | Notes |

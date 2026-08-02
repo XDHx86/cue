@@ -125,6 +125,21 @@ unchanged. `closeStreamSessions()` tears both down on capture stop.
   the venv not ready auto-prepares it on first capture (`autoPrepareLocalVenv`, reuses the Settings
   `ensureVenv` path + `stt:progress`) then re-opens sessions.
 
+## Provider discovery core (R3, ADR-020)
+
+[src/providers/core/](../../src/providers/core/) is the plugin orchestration layer. Singleton
+services: `EventBus`, `ProviderRegistry`, `ModelRegistry`, `CapabilityRegistry`,
+`HealthMonitor`, `CacheManager`, `DiscoveryEngine`. Provider modules call
+`definePlugin(desc)` (alias `defineProvider`) at load time; `main.js` calls
+`configure({ userDataPath })` then `start()` at boot. Core publishes IPC push events
+(`providers:spec:push`, `models:update`, `health:update`, `capabilities:update`,
+`discovery:progress`) via EventBus → `send()` in main. The renderer fetches the initial
+state via `providers:spec` IPC and subscribes to push events for live updates — no
+request/response polling. Provider validation in `store.js` derives the known-provider
+list from the registry (no hardcoded arrays). Providers with `skipAutoSwitch: true`
+(Ollama, OmniRoute) are excluded from auto-switch. The legacy `src/registry.js` is a
+backward-compatible facade delegating to core singletons.
+
 ## Errors are normalized (ADR-011)
 
 [src/errors.js](../../src/errors.js) `normalizeSDKError(err, provider) →
@@ -168,17 +183,22 @@ holds every configurable runtime value; the renderer auto-builds Advanced-tab fi
   The STT push channels are `stt:status` (badge) and `stt:progress` (venv-install/model-download phases).
 - **Transcript turn shape** — `{ channel, text, ts }` must stay array-iterable; both
   `prompts.js formatTranscript` and the renderer's `transcript` consumer assume it.
-- **LLM provider registry** ([src/providers/llm/](../../src/providers/llm/), ADR-017) — adding
-  an LLM provider = one folder `src/providers/llm/<id>/index.js` calling `defineProvider` with
-  `capabilities`/`supportedModels`/`configurableSettings`/`defaultSettings`/`createEngine`.
+- **LLM provider registry** ([src/providers/llm/](../../src/providers/llm/), ADR-017 / ADR-020)
+  — adding an LLM provider = one folder `src/providers/llm/<id>/index.js` calling `definePlugin`
+  with `capabilities`/`supportedModels`/`configurableSettings`/`defaultSettings`/`createEngine`.
   No `src/llm.js` switch edit, no DEFAULTS slice (`defaultSettings` auto-folds into
   [src/store.js](../../src/store.js) via `foldLlmDefaults`), no Settings-UI edit (R3 auto-builds
-  from `configurableSettings`). OpenAI-compatible gateways share
+  from `configurableSettings` with `settingsPath` and `group`). Capabilities use rich schema:
+  `{ state, source, confidence }`. OpenAI-compatible gateways share
   [src/providers/llm/openai-compat.js](../../src/providers/llm/openai-compat.js); shared helpers
   (lazy logger + `stripDataUrl`) live in [src/providers/llm/shared.js](../../src/providers/llm/shared.js)
   (kept below llm.js in the require graph — providers must not require llm.js). The old per-provider
-  `if/else` + `streamX` switch that lived in `src/llm.js` is gone; `createLLM` delegates. (STT stays
-  on the `src/stt.js` chain until R2.)
+  `if/else` + `streamX` switch that lived in `src/llm.js` is gone; `createLLM` delegates.
+- **STT provider registry** ([src/providers/stt/](../../src/providers/stt/), ADR-017 / ADR-020)
+  — same plugin contract as LLM. Adding an STT provider = one folder calling `definePlugin`.
+  Providers with `capabilities.streaming` and/or `capabilities.batch` declare their transport.
+  The streaming resolver (`src/stt-stream.js`) and batch chain (`src/stt.js`) both read the
+  registry; no hardcoded provider lists remain.
 - **STT engine** ([src/stt-engine.js](../../src/stt-engine.js)) — a new local engine = one
   `registerEngine(name, factory)` implementing `{ start, sendAudio, close }` +
   onFinal/onPartial/onStatus/onError, plus an `ENGINE_META` label + a DEFAULTS entry. main.js and

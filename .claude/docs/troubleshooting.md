@@ -57,11 +57,12 @@ not duplicate it here. Format: symptom → check → fix.
   (Phase 0b fix).
 
 ## Config / env
-- **`.env` key not applied** — `loadDotenv()` must run before `require('./src/store')`. Env
-  overrides are runtime-only and never written to `cue-data.json`; a shell-set var wins over
-  `.env`. Set `CUE_ENV_DEBUG=1` for the loader trace.
+- **`.env` key not applied** — `.env` system was retired (ADR-015); all config lives in the
+  Store (`src/store.js`). If you previously relied on `CUE_*` env overrides, migrate those
+  values into Settings. The `CUE_STT_LOG_*` env path is the only remaining spawn-time override
+  (passed to the Python child at spawn via `buildPyLogEnv`).
 - **OpenAI SDK constructor throws on missing apiKey** — key-less gateways need a non-empty
-  sentinel (Ollama: `'ollama'`) + a `ready` bypass; see ADR-005.
+  sentinel (Ollama: `'ollama'`, OmniRoute: `'omniroute'`) + a `ready` bypass; see ADR-005.
 
 ## Docs (meta)
 - **Where's the live working-tree state?** — `git status` / `git diff`. `state.md` intentionally

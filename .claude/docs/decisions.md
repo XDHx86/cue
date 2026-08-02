@@ -158,6 +158,28 @@ from settings, preserving the env-var interface for the child process without a 
 `env` fields removed from config-schema.js. **Alternatives rejected:** keep `.env` as a pure
 convenience seeder (redundant with the Store; two config surfaces breeds drift).
 
+## ADR-020 — Plugin-centric provider discovery with core singleton services — implemented (R3)
+**Decision:** a unified core module (`src/providers/core/`) owns singleton services (EventBus,
+ProviderRegistry, ModelRegistry, CapabilityRegistry, HealthMonitor, CacheManager,
+DiscoveryEngine) that orchestrate all provider plugins. Each provider calls `definePlugin()`
+(alias `defineProvider` for backward compat) with a rich descriptor: capabilities as
+`{ state, source, confidence }`, `configurableSettings` with `settingsPath`/`group`, optional
+`skipAutoSwitch`, optional `healthConfig`, and `createEngine`. The legacy `src/registry.js`
+becomes a thin facade delegating to core singletons. IPC push events (`providers:spec:push`,
+`models:update`, `health:update`, `capabilities:update`, `discovery:progress`) replace
+request/response polling — the renderer subscribes to events and updates dynamically from a
+unified `providers:spec` handler. Provider/model lists are no longer hardcoded in `store.js` or
+the renderer; validation derives from the registry at runtime.
+**Rationale:** ADR-017's two-bucket registry was built for LLM only (R1). Extending to 17
+providers (LLM + STT) with capabilities, health checks, model discovery, and dynamic UI
+demanded a richer orchestration layer. The core module replaces ad-hoc registry access with
+typed services, adds event-driven push to the renderer, and eliminates hardcoded provider
+lists from store.js and renderer — a single `definePlugin()` call in a provider folder
+is the only entry point.
+**Alternatives rejected:** extending the bare Map-based registry (no events, no health, no
+model management — adding those piecemeal would recreate the core piecemeal); a separate
+plugin host process (violates the "no native modules, no build step" invariant).
+
 ## ADR-017 — Shared provider descriptor shape, two registries (LLM + STT) — implemented (R1)
 **Decision:** one self-describing descriptor shape (`id, displayName, providerType, capabilities,
 supportedModels, configurableSettings, defaultSettings, order, createEngine` + optional

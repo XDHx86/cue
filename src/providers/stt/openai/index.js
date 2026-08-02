@@ -1,27 +1,33 @@
 // OpenAI Whisper STT provider — batch transcription via audio.transcriptions API.
-// Self-describing descriptor: declare id/capabilities/supportedModels/configurableSettings/
-// defaultSettings, then createEngine returns { provider, ready, transcribe(wav) }.
-// Lazy-requires the 'openai' SDK INSIDE transcribe so requiring this folder at load time
-// (the registry discovery pass) pulls no network SDK.
+// Plugin descriptor with rich capabilities, settingsPath. R3 migration: definePlugin.
+// Lazy-requires the 'openai' SDK INSIDE transcribe.
 
-const { defineProvider } = require('../../../registry');
+const { definePlugin } = require('../../core');
 
-defineProvider({
+definePlugin({
   id: 'openai',
   displayName: 'OpenAI Whisper',
   description: 'OpenAI Whisper — batch speech-to-text via audio.transcriptions API.',
   providerType: 'stt',
   order: 20,
-  capabilities: { batch: true, streaming: false },
+  capabilities: {
+    batch: { state: 'supported', source: 'declared' },
+    streaming: { state: 'unsupported', source: 'declared' },
+  },
   modelSettingsPath: 'stt.model',
   supportedModels: () => [
     { id: 'whisper-1', label: 'Whisper v1' },
     { id: 'gpt-4o-mini-transcribe', label: 'GPT-4o Mini Transcribe' },
     { id: 'gpt-4o-transcribe', label: 'GPT-4o Transcribe' },
   ],
+  healthCheck: async ({ apiKey }) => {
+    if (!apiKey) return { state: 'invalid_config', reason: 'No API key' };
+    return { state: 'healthy' };
+  },
+  healthConfig: { intervalMs: 600000, timeoutMs: 5000 },
   configurableSettings: [
-    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'sk-...' },
-    { id: 'model', label: 'Model', type: 'text', placeholder: 'whisper-1' },
+    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'sk-...', settingsPath: 'apiKeys.openai', group: 'config' },
+    { id: 'model', label: 'Model', type: 'text', placeholder: 'whisper-1', settingsPath: 'stt.model', group: 'config' },
   ],
   defaultSettings: {
     apiKeys: { openai: '' },

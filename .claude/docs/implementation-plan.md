@@ -24,8 +24,8 @@ below by **navigating to the named symbol**, not the raw line (lines drift with 
 |---|---|---|
 | **0a** | B1 re-render / ring buffer / watchdog | ✅ committed (`5422c30` `a3ad3f0` `cf8debb` `8cbd467`) — detail below archived |
 | **0b** | B2 Zoom overlay + primary display | ✅ committed (`2faec2b`) — detail below archived |
-| **1** | F1 `.env` system | ✅ committed (`b10fa03`) — detail below archived |
-| **2** | F3 Ollama provider | ✅ committed (`48c6552`) — detail below archived |
+| **1** | F1 `.env` system | ✅ committed (`b10fa03`) — retired by ADR-015 (`.env` system removed) |
+| **2** | F3 Ollama provider | ✅ committed (`48c6552`) — now plugin-centric (ADR-020); detail below archived |
 | **3** | F4 faster-whisper + F6 continuous streaming + F13 `Ctrl+Alt+A` | ✅ committed (`93bcf58` `a3f3a4b` `ee29e56` `9d17ac9`); **enhanced on `feat/local-stt-engine`** with a managed Python service + engine-agnostic registry (`36f83af`→`e1bf887`, ADR-013) — detail below |
 | **4** | F8/F9/F10/F11 composition-point refactor (skills, memory, pre-prompt, résumé) | 🟡 next |
 | **5** | F5 show/hide (`Ctrl+Alt+C`), F2 drag, F12 vision speed | ✅ committed (`abca5b6` `57e3716`) — in `main` |
@@ -173,7 +173,7 @@ The single `appendResumeContext(...)` call becomes
 - Docs: README "Configuration via .env" section + ship a `.env.example` (dev-only, not in the
   `files` allowlist).
 
-### Phase 2 — F3: Ollama provider  🟡 in-flight
+### Phase 2 — F3: Ollama provider  ✅ committed
 - [src/llm.js](../../src/llm.js) provider switch: `if (provider === 'ollama') return
   streamOpenAI({ ...args, baseURL: (settings.ollama && settings.ollama.baseURL) ||
   'http://localhost:11434/v1', apiKey: 'ollama' })` (OpenAI SDK needs a non-empty `apiKey`;
@@ -242,7 +242,7 @@ The single `appendResumeContext(...)` call becomes
   so the assistant answers from the live state. Because STT sessions are owned by `setCapturing`
   and never gated by `state.busy`, requesting an answer never interrupts the transcription stream.
 
-### Phase 4 — Composition-point refactor (F8 + F9 + F10 + F11, bundle together)  ⬜
+### Phase 4 — Composition-point refactor (F8 + F9 + F10 + F11, bundle together)  ✅ shipped
 - NEW `src/skills.js`: `loadSkillDir(dir)` reads `dir/.claude/skills/*.md`,
   parses frontmatter, returns `[{name,description,body}]` capped at 8000 chars; cache per
   capture session with directory mtime check.

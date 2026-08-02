@@ -29,6 +29,10 @@ const { getLogger, child, stopLogger } = require('./src/logger');
 let appLog_ = null;
 function appLog() { return appLog_ || (appLog_ = child('main')); }
 const { listProviders, listProvidersSafe, resolveSupportedModels } = require('./src/registry');
+// Plugin-centric discovery system (R3). The core module owns singleton services (bus,
+// providerRegistry, modelRegistry, healthMonitor, cacheManager, discoveryEngine) that
+// orchestrate provider plugins. Provider modules register via definePlugin() at load time.
+const core = require('./src/providers/core');
 const { scanCachedModels } = require('./src/stt-models');
 // Local-service health checks (OmniRoute gateway reachability, local faster-whisper engine
 // readiness). Populated at startup + on settings:set + periodically; providers read it
@@ -148,6 +152,17 @@ function applyContentProtection() {
 let flushTimer = null;
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
+
+// Wire the discovery EventBus events to IPC so the renderer receives push updates.
+// This replaces request/response polling — the renderer subscribes to events and updates
+// automatically when provider specs, models, health, or capabilities change.
+core.bus.on('providers:spec:push', (data) => send('providers:spec:push', data));
+core.bus.on('models:update', (data) => send('models:update', data));
+core.bus.on('models:selected', (data) => send('models:selected', data));
+core.bus.on('health:provider', (data) => send('health:update', data));
+core.bus.on('health:model', (data) => send('health:update', data));
+core.bus.on('discovery:progress', (data) => send('discovery:progress', data));
+core.bus.on('capabilities:update', (data) => send('capabilities:update', data));
 
 // Show/hide the whole overlay window (Ctrl+Alt+C). Distinct from the renderer's panel-collapse
 // "Hide" button, which only folds the panel and keeps the top bar visible — this toggles the
@@ -760,6 +775,14 @@ ipcMain.handle('stt:providers', async () => {
   return result;
 });
 
+// Unified provider spec — returns both LLM and STT providers with their render-safe
+// descriptors. The renderer fetches this once on boot and subscribes to push events
+// for live updates (providers:spec:push, models:update, health:update).
+ipcMain.handle('providers:spec', () => ({
+  llm: core.providerRegistry.listPluginsSafe('llm'),
+  stt: core.providerRegistry.listPluginsSafe('stt'),
+}));
+
 // -------- shortcuts --------
 function normalizeShortcut(accelerator) {
   return typeof accelerator === 'string' ? accelerator.trim().replace(/\s+/g, '') : '';
@@ -905,6 +928,13 @@ app.whenReady().then(() => {
   // periodic poll catches services (e.g. OmniRoute, Ollama) started after cue.
   localHealth.checkAll(initSettings, { localManagerReady });
   localHealth.startPeriodicCheck(() => store.getSettings(), { localManagerReady });
+
+  // R3 discovery system startup: configure cache path, then start background discovery
+  // (model discovery, health checks). This runs alongside the existing local-health
+  // periodic checks — both complement each other (local-health = service reachability,
+  // core discovery = model availability + rich health states).
+  core.configure({ userDataPath: app.getPath('userData') });
+  core.start();
 
   // Rolling-summary compaction runner. The watermark IS transcriptState.lastSummarizedTs (src/
   // transcript.js exposes it for memory.js to advance), so this module advances it through the

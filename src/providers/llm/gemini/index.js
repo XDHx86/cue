@@ -1,30 +1,44 @@
-// Gemini LLM provider — Google AI Studio (@google/genai). Streaming uses generateContentStream;
-// image input via inlineData { mimeType, data } which needs the mime split (stripDataUrl). The
-// role remap (assistant → model) and the config.systemInstruction seam are preserved verbatim
-// from the pre-refactor streamGemini.
-//
-// Note: Gemini's SDK does not take a max_tokens in generateContentStream — maxTokens is computed
-// for engine-shape parity and unused in the request, matching the original behavior.
+// Gemini LLM provider — Google AI Studio (@google/genai).
+// Plugin descriptor with rich capabilities, settingsPath, model discovery, and health checks.
+// Lazy-requires the SDK INSIDE createEngine. R3 migration: definePlugin.
 
-const { defineProvider } = require('../../../registry');
+const { definePlugin } = require('../../core');
 const { log, stripDataUrl } = require('../shared');
 const { normalizeSDKError } = require('../../../errors');
 
-defineProvider({
+definePlugin({
   id: 'gemini',
   displayName: 'Gemini',
   description: 'Google Gemini models — streaming chat with image input.',
   providerType: 'llm',
   order: 3,
-  capabilities: { streaming: true, vision: true },
+  capabilities: {
+    streaming: { state: 'supported', source: 'declared' },
+    vision: { state: 'supported', source: 'declared' },
+  },
   supportedModels: [
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
   ],
+  discoverModels: async ({ apiKey, signal }) => {
+    if (!apiKey) return null;
+    try {
+      const { GoogleGenAI } = require('@google/genai');
+      const ai = new GoogleGenAI({ apiKey });
+      const res = await ai.models.list({ signal });
+      return (res.models || res || []).filter(m => m.name && m.name.includes('gemini'));
+    } catch { return null; }
+  },
+  normalizeModels: (raw) => require('../../core/adapters/gemini').normalizeModels(raw, 'gemini'),
+  healthCheck: async ({ apiKey }) => {
+    if (!apiKey) return { state: 'invalid_config', reason: 'No API key' };
+    return { state: 'healthy' }; // Gemini has no lightweight health endpoint
+  },
+  healthConfig: { intervalMs: 600000, timeoutMs: 5000 },
   configurableSettings: [
-    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'AIza...' },
-    { id: 'fast', label: 'Fast model', type: 'text', placeholder: 'gemini-2.5-flash' },
-    { id: 'smart', label: 'Smart model', type: 'text', placeholder: 'gemini-2.5-pro' },
+    { id: 'apiKey', label: 'API Key', type: 'secret', placeholder: 'AIza...', settingsPath: 'apiKeys.gemini', group: 'config' },
+    { id: 'fast', label: 'Fast model', type: 'text', placeholder: 'gemini-2.5-flash', settingsPath: 'models.gemini.fast', group: 'models' },
+    { id: 'smart', label: 'Smart model', type: 'text', placeholder: 'gemini-2.5-pro', settingsPath: 'models.gemini.smart', group: 'models' },
   ],
   defaultSettings: {
     apiKeys: { gemini: '' },
