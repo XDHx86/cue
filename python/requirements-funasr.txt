@@ -1,0 +1,17 @@
+# cue local Speech-to-Text service (FunASR / Paraformer) — pinned.
+# Installed into a project-local venv (userData/stt-venv-funasr) by
+# src/stt-process.js, never into node_modules. Keep isolated from the
+# faster-whisper venv — FunASR pulls a torch stack; faster-whisper
+# pulls CTranslate2 only, and the two venvs must not intermix.
+#
+# Paraformer-large is ~1.3 GB on first import (auto-fetched by modelscope),
+# so first-use latency is dominated by the modelscope snapshot_download, not
+# pip. The pip install itself is quick — torch >= 2.0 + funasr + modelscope
+# fits in ~2 GB.
+funasr==1.2.7
+torch>=2.0.1,<2.7.0
+modelscope>=1.17.1
+torchaudio>=2.0.0
+webrtcvad==2.0.10
+numpy>=1.26.0
+loguru==0.7.3

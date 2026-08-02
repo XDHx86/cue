@@ -13,6 +13,7 @@ defineProvider({
   providerType: 'stt',
   order: 30,
   capabilities: { batch: true, streaming: false },
+  modelSettingsPath: null,
   supportedModels: () => [
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   ],

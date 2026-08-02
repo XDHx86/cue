@@ -255,7 +255,7 @@ Issues and PRs welcome. cue is intentionally small and readable — `main.js` (a
 - [x] Local zero-latency streaming transcription (faster-whisper, managed) — built; see [docs/faster-whisper-setup.md](docs/faster-whisper-setup.md)
 - [x] AssemblyAI real-time streaming transcription (v3 WebSocket API) — built
 - [ ] Add a second local STT engine (e.g. whisper.cpp) via the `src/stt-engine.js` registry
-- [ ] Add optional Deepgram support for ultra-fast transcription
+- [x] Add optional Deepgram support for ultra-fast transcription (streaming + batch)
 
 ## Credits & license
 

@@ -28,7 +28,7 @@ const { getLogger, child, stopLogger } = require('./src/logger');
 // ADR-014). Lazily resolved: getLogger() needs store settings, so first use defers until then.
 let appLog_ = null;
 function appLog() { return appLog_ || (appLog_ = child('main')); }
-const { listProvidersSafe } = require('./src/registry');
+const { listProviders, listProvidersSafe, resolveSupportedModels } = require('./src/registry');
 const { scanCachedModels } = require('./src/stt-models');
 
 // Single shared STT process manager. Created lazily (app.getPath isn't safe before
@@ -127,6 +127,19 @@ function sttFlushMs() { const s = store.getSettings(); return (s.stt && s.stt.fl
 function sttMinBytes() { const s = store.getSettings(); return (s.stt && s.stt.minBytes) || 9600; }
 function sttRmsGate() { const s = store.getSettings(); return (s.stt && s.stt.rmsGate) || 240; }
 function sttTranscribeTimeout() { const s = store.getSettings(); return (s.stt && s.stt.transcribeTimeoutMs) || 30000; }
+
+// Apply the screen-capture exclusion toggle to the overlay window. When on (default), the
+// window is hidden from screen sharing/recording via setContentProtection. The CUE_NO_PROTECT
+// env var remains as a last-resort debug override (forces protection off regardless of settings).
+function contentProtectionEnabled() {
+  const s = store.getSettings();
+  const on = !(s && s.screen) || s.screen.contentProtection !== false; // default true (also for missing key)
+  return on && !process.env.CUE_NO_PROTECT;
+}
+function applyContentProtection() {
+  if (!win || win.isDestroyed()) return;
+  win.setContentProtection(contentProtectionEnabled()); // best-effort exclusion from capture
+}
 let flushTimer = null;
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
@@ -174,8 +187,10 @@ function createWindow() {
     }
   });
 
-  // Invisibility + overlay behavior. Set CUE_NO_PROTECT=1 to disable for debugging.
-  win.setContentProtection(!process.env.CUE_NO_PROTECT);            // excluded from screen capture (best-effort)
+  // Invisibility + overlay behavior. Excluded from screen capture by default
+  // (screen.contentProtection, overridable in Advanced Settings); CUE_NO_PROTECT=1 forces it
+  // off for debugging. Live-applied via applyContentProtection() on settings:set.
+  win.setContentProtection(contentProtectionEnabled());            // excluded from screen capture (best-effort)
   if (process.platform === 'darwin') {
     win.setAlwaysOnTop(true, 'screen-saver', 1);
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -645,6 +660,7 @@ ipcMain.handle('settings:set', (_e, patch) => {
   // Live-apply settings that don't require a restart.
   if (patch && patch.shortcuts) reapplyShortcuts();
   if (patch && patch.stt && patch.stt.flushMs !== undefined) rearmFlushLoop();
+  if (patch && patch.screen && patch.screen.contentProtection !== undefined) applyContentProtection();
   if (patch && patch.transcript && patch.transcript.maxTurns !== undefined) {
     setTranscriptConfig({ maxTurns: store.getSettings().transcript.maxTurns });
   }
@@ -714,6 +730,28 @@ ipcMain.handle('stt:model:delete', async (_e, model) => {
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 ipcMain.handle('stt:engine:list', () => listProvidersSafe('stt').filter((p) => p.capabilities && p.capabilities.local));
+// All STT providers with resolved supportedModels — the registry-driven source of truth for the
+// Settings UI's Transcription provider + model dropdowns. Local providers' models are resolved
+// with the managed engine's modelsDir so cached/downloaded flags are current.
+ipcMain.handle('stt:providers', async () => {
+  const mgr = getSttManager();
+  const modelsDir = mgr ? mgr.getModelsDir() : '';
+  const descs = listProviders('stt');
+  const result = [];
+  for (const d of descs) {
+    const models = await resolveSupportedModels(d, { modelsDir, fs });
+    result.push({
+      id: d.id,
+      displayName: d.displayName,
+      description: d.description || '',
+      capabilities: d.capabilities || {},
+      supportedModels: models,
+      modelSettingsPath: d.modelSettingsPath || null,
+      order: d.order || 0,
+    });
+  }
+  return result;
+});
 
 // -------- shortcuts --------
 function normalizeShortcut(accelerator) {

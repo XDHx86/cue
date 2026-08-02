@@ -26,6 +26,7 @@ defineProvider({
   order: 10,
   capabilities: { streaming: true, batch: true, local: true },
   supportedModels: (ctx) => scanCachedModels(ctx.modelsDir, ctx.fs),
+  modelSettingsPath: 'stt.local.model',
   configurableSettings: [
     { id: 'model', label: 'Model', type: 'select',
       options: STT_MODEL_SIZES.map((s) => ({ id: s, label: s })), placeholder: 'small' },

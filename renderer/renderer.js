@@ -327,24 +327,58 @@
   }
   cue.on('status', ({ message }) => { cue.log('[status] ' + message); showStatus(message); });
 
-  // ---- Speech-to-Text settings (managed local engine) ---------------------
-  // Mirrors the provider/skill seg convention (.on = selected). The engine + model
-  // <select>s are data-driven: the engine list comes from the registry
-  // (src/stt-engine.js → engineMeta()), the model list from a filesystem cache scan
-  // (src/stt-models.js → stt:diagnostics). Diagnostics render into #stt-diagnostics.
+  // ---- Speech-to-Text settings (registry-driven) -------------------------
+  // The active STT provider and model are chosen in the Models tab via the
+  // Provider and Model <select>s, both populated from the stt:providers IPC
+  // (registry → src/providers/stt/<id>/index.js). The Transcription tab
+  // retains the On/Off toggle, local engine config, and diagnostics.
   const sttDiagEl = $('#stt-diagnostics');
   const sttModelStatus = $('#stt-model-status');
-  let sttEngineOptions = null;   // [{id,label}] cached so fillSttSettings needn't re-fetch
-  let sttModelRows = [];         // [{name,cached}] from the last diagnostics scan
+  let sttProviderList = [];  // [{id, displayName, capabilities, supportedModels, modelSettingsPath, ...}]
+  let sttModelRows = [];     // [{name,cached}] from the diagnostics cache scan
 
-  // Rebuild the model <select> from the cache scan, keeping the configured selection. A
-  // model the user configured but that no longer appears in the scan still maps if present.
-  function syncSttModelSelect() {
+  // Transport pseudo-modes that aren't provider ids: 'auto' maps to the faster-whisper
+  // local engine's model slot; 'batch' maps to the OpenAI Whisper model slot.
+  const STT_MODEL_SOURCE = { auto: 'faster-whisper', batch: 'openai' };
+  const STT_MODEL_PATH = { auto: 'stt.local.model', batch: 'stt.model' };
+
+  // Generic model value read/write via a dotted settings path (e.g. 'stt.deepgramModel').
+  function resolveModelValue(stt, path) {
+    if (!path) return '';
+    const segs = path.split('.');
+    let obj = stt;
+    for (const s of segs) { obj = obj && obj[s]; }
+    return obj || '';
+  }
+  function setModelValue(stt, path, value) {
+    if (!path) return;
+    const segs = path.split('.');
+    let obj = stt;
+    for (let i = 0; i < segs.length - 1; i++) {
+      if (!obj[segs[i]] || typeof obj[segs[i]] !== 'object') obj[segs[i]] = {};
+      obj = obj[segs[i]];
+    }
+    obj[segs[segs.length - 1]] = value;
+  }
+
+  // Rebuild the model <select> for the ACTIVE provider. Transport pseudo-modes
+  // ('auto'/'batch') resolve to a specific provider's model list via STT_MODEL_SOURCE.
+  // A configured model that no longer appears in the list still maps if present.
+  function syncSttModelOptions() {
     const sel = $('#stt-model');
-    const want = (settings.stt && settings.stt.local && settings.stt.local.model) || 'small';
-    sel.innerHTML = sttModelRows.length
-      ? sttModelRows.map((r) => '<option value="' + r.name + '">' + r.name + (r.cached ? ' (cached)' : '') + '</option>').join('')
-      : '<option value="">no models</option>';
+    const prov = $('#stt-provider').value;
+    const modelSource = STT_MODEL_SOURCE[prov] || prov;
+    const desc = sttProviderList.find((p) => p.id === modelSource);
+    const models = desc && desc.supportedModels;
+    const modelPath = STT_MODEL_PATH[prov] || (desc && desc.modelSettingsPath);
+    const want = resolveModelValue(settings.stt, modelPath);
+    if (!models || !models.length) {
+      sel.innerHTML = '<option value="">default model</option>';
+      return;
+    }
+    sel.innerHTML = models.map((o) =>
+      '<option value="' + o.id + '">' + o.label + (o.cached ? ' (cached)' : '') + '</option>'
+    ).join('');
     if ([...sel.options].some((o) => o.value === want)) sel.value = want;
   }
 
@@ -362,24 +396,45 @@
 
   async function refreshSttDiagnostics() {
     try {
-      const d = await cue.sttDiagnostics();
+      const [d, providers] = await Promise.all([
+        cue.sttDiagnostics(),
+        cue.sttProvidersList(),
+      ]);
       sttModelRows = d.models || [];
+      sttProviderList = providers;
       renderSttDiagnostics(d);
-      syncSttModelSelect();
+      syncSttModelOptions();
     } catch (e) {
       sttDiagEl.textContent = 'Diagnostics unavailable.';
     }
   }
 
-  // Show the External-URL field only when a transport might use it ('auto' fallback or
-  // explicit 'faster-whisper'); it's irrelevant for 'local' and 'batch'.
-  function syncSttUrlVisibility() {
+  // The Transcription-tab config adapts to the chosen provider (selected in Models tab):
+  //   - External-URL field for 'auto' fallback or 'external-ws'.
+  //   - Local engine config (device / compute / language / VAD) + Download/Delete/Prepare only
+  //     for providers with capabilities.local (auto includes local as a fallback).
+  //   - Model field hidden for 'external-ws' (the server owns its model).
+  function syncSttConfigVisibility() {
     const prov = $('#stt-provider').value;
-    const show = prov === 'auto' || prov === 'faster-whisper';
-    $('#stt-fw-url').closest('.s-field').style.display = show ? '' : 'none';
+    const desc = sttProviderList.find((p) => p.id === prov);
+    const isLocal = prov === 'auto' || (desc && desc.capabilities && desc.capabilities.local);
+    $('#stt-fw-url').closest('.s-field').style.display = (prov === 'auto' || prov === 'external-ws') ? '' : 'none';
+    // Local engine config controls live in the Transcription tab. Hide the wrapping
+    // .s-field when present (keeps spacing clean); #stt-device-seg is a bare .s-seg.
+    ['#stt-device-seg', '#stt-compute', '#stt-language', '#stt-vad-seg'].forEach((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const target = el.closest('.s-field') || el;
+      target.style.display = isLocal ? '' : 'none';
+    });
+    // Model lifecycle buttons live in the Models tab and only apply to local providers.
+    $('#stt-model-download').style.display = isLocal ? '' : 'none';
+    $('#stt-model-delete').style.display = isLocal ? '' : 'none';
+    $('#stt-prepare').closest('.s-resume-actions').style.display = isLocal ? '' : 'none';
+    $('#stt-model-field').style.display = prov === 'external-ws' ? 'none' : '';
   }
 
-  // Fills every STT control from settings, then fetches diagnostics. Called from
+  // Fills every STT control from settings, then fetches diagnostics + providers. Called from
   // fillSettings() (not awaited — the STT block populates a moment after the panel opens,
   // matching the async reload-button pattern above).
   async function fillSttSettings() {
@@ -387,24 +442,30 @@
     const loc = stt.local || {};
     // On/Off seg: default is On (settings.stt.enabled is true unless explicitly false).
     document.querySelectorAll('#stt-enabled-seg button').forEach((b) => b.classList.toggle('on', b.dataset.sttEnabled === (stt.enabled === false ? 'off' : 'on')));
-    $('#stt-provider').value = stt.provider || 'auto';
-    // Engine <select> is data-driven from the registry; cache so reopening Settings
-    // doesn't re-invoke the (cheap) engine:list round-trip every time.
-    const eng = $('#stt-engine');
-    if (!sttEngineOptions) {
-      try { sttEngineOptions = await cue.sttEngineList(); }
-      catch { sttEngineOptions = [{ id: 'faster-whisper', label: 'faster-whisper (local)' }]; }
+    // Provider dropdown: transport modes (auto + batch) + all registry STT providers.
+    if (!sttProviderList.length) {
+      try { sttProviderList = await cue.sttProvidersList(); }
+      catch { sttProviderList = []; }
     }
-    eng.innerHTML = sttEngineOptions.map((e) => '<option value="' + e.id + '">' + e.label + '</option>').join('');
-    eng.value = stt.engine || 'faster-whisper';
+    const STT_TRANSPORT_MODES = [
+      { id: 'auto', displayName: 'Auto (managed → external → batch)' },
+      { id: 'batch', displayName: 'Batch (cloud) only' },
+    ];
+    const provSel = $('#stt-provider');
+    provSel.innerHTML = [...STT_TRANSPORT_MODES, ...sttProviderList].map((p) =>
+      '<option value="' + p.id + '">' + p.displayName + '</option>'
+    ).join('');
+    provSel.value = stt.provider || 'auto';
+    // Local engine config
     $('#stt-compute').value = loc.computeType || 'int8';
     $('#stt-language').value = loc.language || 'auto';
     document.querySelectorAll('#stt-device-seg button').forEach((b) => b.classList.toggle('on', b.dataset.device === (loc.device || 'auto')));
     document.querySelectorAll('#stt-vad-seg button').forEach((b) => b.classList.toggle('on', b.dataset.vad === (loc.vad === false ? 'off' : 'on')));
     $('#stt-fw-url').value = stt.fasterWhisperURL || '';
-    syncSttUrlVisibility();
-    // The model <select> is populated by refreshSttDiagnostics() (it owns the cache scan);
-    // no early sync here to avoid a 'no models' flash before the scan returns.
+    // Model <select> is populated from the selected provider's supportedModels (via stt:providers).
+    // refreshSttDiagnostics() re-syncs when the diagnostics cache scan returns.
+    syncSttConfigVisibility();
+    syncSttModelOptions();
     await refreshSttDiagnostics();
   }
 
@@ -414,9 +475,12 @@
       document.querySelectorAll('#' + id + ' button').forEach((x) => x.classList.toggle('on', x === b));
     }));
   });
-  // Transport change only toggles the External-URL field's visibility; the segs above
-  // handle their own .on state.
-  $('#stt-provider').addEventListener('change', syncSttUrlVisibility);
+  // Provider change re-adapts the Transcription-tab config AND repopulates the Models-tab
+  // model select for the newly chosen provider (the segs above handle their own .on state).
+  $('#stt-provider').addEventListener('change', () => {
+    syncSttConfigVisibility();
+    syncSttModelOptions();
+  });
 
   // Model management: prepare (venv) / download / delete. Each updates the inline status
   // hint and refreshes diagnostics + the model select so cached flags stay current. A
@@ -478,6 +542,7 @@
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
     $('#key-assemblyai').value = settings.apiKeys.assemblyai || '';
     $('#key-groq').value = settings.apiKeys.groq || '';
+    $('#key-deepgram').value = settings.apiKeys.deepgram || '';
     $('#ollama-baseurl').value = (settings.ollama && settings.ollama.baseURL) || '';
     $('#resume-context').value = settings.resumeContext || '';
     // Assistant style: read the live promptOverrides.prePrompt home (the legacy top-level
@@ -511,7 +576,8 @@
     // Ollama has no real key (apiKeys.ollama is a non-empty sentinel), so it is never listed
     // under "keys: …". The "Active: <provider>" prefix already shows it when selected.
     const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia'].filter(Boolean);
-    const stt = k.openai ? 'Whisper' : (k.gemini ? 'Gemini' : 'none');
+    const sttDesc = sttProviderList.find((p) => p.id === (settings.stt && settings.stt.provider)) || {};
+    const stt = sttDesc.displayName || (settings.stt && settings.stt.provider) || 'none';
     return 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') + ' · transcription: ' + stt;
   }
   document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
@@ -547,6 +613,7 @@
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
     settings.apiKeys.assemblyai = $('#key-assemblyai').value.trim();
     settings.apiKeys.groq = $('#key-groq').value.trim();
+    settings.apiKeys.deepgram = $('#key-deepgram').value.trim();
     settings.ollama = { baseURL: $('#ollama-baseurl').value.trim() };
     settings.resumeContext = $('#resume-context').value.trim();
     // Pre-prompt: write the live promptOverrides.prePrompt home (the only override composeSystem
@@ -568,22 +635,31 @@
     const sttOn = [...document.querySelectorAll('#stt-enabled-seg button.on')].map((b) => b.dataset.sttEnabled)[0] === 'on';
     const sttDevice = [...document.querySelectorAll('#stt-device-seg button.on')].map((b) => b.dataset.device)[0] || 'auto';
     const sttVad = [...document.querySelectorAll('#stt-vad-seg button.on')].map((b) => b.dataset.vad)[0] !== 'off';
+    const sttProvider = $('#stt-provider').value;
+    const sttModelVal = $('#stt-model').value;
     settings.stt = {
       ...(settings.stt || {}),
       enabled: sttOn,
-      provider: $('#stt-provider').value,
-      engine: $('#stt-engine').value || 'faster-whisper',
+      provider: sttProvider,
       fasterWhisperURL: $('#stt-fw-url').value.trim(),
       deepgramURL: (settings.stt && settings.stt.deepgramURL) || '',
-      model: (settings.stt && settings.stt.model) || '', // OpenAI batch model — untouched namespace
+      model: (settings.stt && settings.stt.model) || '',
+      assemblyaiSpeechModel: (settings.stt && settings.stt.assemblyaiSpeechModel) || '',
       local: {
-        model: $('#stt-model').value || 'small',
+        ...((settings.stt && settings.stt.local) || {}),
+        model: (settings.stt && settings.stt.local && settings.stt.local.model) || 'small',
         device: sttDevice,
         computeType: $('#stt-compute').value || 'int8',
         language: $('#stt-language').value || 'auto',
         vad: sttVad,
       },
     };
+    // Route the Models-tab model select to the ACTIVE provider's slot via the
+    // declarative modelSettingsPath on the provider descriptor. Transport pseudo-modes
+    // ('auto'/'batch') use the fixed STT_MODEL_PATH lookup.
+    const modelPath = STT_MODEL_PATH[sttProvider] ||
+      (sttProviderList.find((p) => p.id === sttProvider) || {}).modelSettingsPath;
+    if (modelPath) setModelValue(settings.stt, modelPath, sttModelVal);
     saveSchemaFields();
     await cue.settingsSet(settings);
   }
@@ -823,7 +899,10 @@
 
   function schemaInputId(path) { return 'sch-' + path.replace(/\./g, '-'); }
 
-  // Build a single field HTML element from a schema entry.
+  // Build a single field HTML element from a schema entry. Branches on type:
+  //   textarea (kind:'textarea') → multiline text; string → text input;
+  //   bool → checkbox; int/float → number input. The earlier code rendered every non-
+  //   textarea entry as type="number", so string/bool logging fields showed as numeric.
   function schemaFieldHtml(entry) {
     const id = schemaInputId(entry.path);
     const restartBadge = entry.restart ? ' <span class="s-hint" style="color:#d97706;">⚡ restart</span>' : '';
@@ -836,7 +915,21 @@
         + ' placeholder="Empty = built-in default"></textarea></div>'
         + hintHtml;
     }
-    // numeric input
+    if (entry.type === 'bool') {
+      return '<div class="s-field"><span>' + esc(entry.label) + '</span>'
+        + '<input id="' + id + '" type="checkbox" data-path="' + esc(entry.path) + '" />'
+        + '</div>'
+        + hintHtml;
+    }
+    if (entry.type === 'string') {
+      return '<div class="s-field"><span>' + esc(entry.label) + '</span>'
+        + '<input id="' + id + '" type="text" autocomplete="off"'
+        + ' data-path="' + esc(entry.path) + '"'
+        + ' placeholder="Empty = built-in default" />'
+        + '</div>'
+        + hintHtml;
+    }
+    // numeric input (int / float)
     const step = entry.type === 'float' ? 0.01 : 1;
     return '<div class="s-field"><span>' + esc(entry.label) + '</span>'
       + '<input id="' + id + '" type="number"'
@@ -888,7 +981,11 @@
       const el = document.getElementById(schemaInputId(entry.path));
       if (!el) continue;
       const val = resolvePath(settings, entry.path);
-      el.value = (val !== undefined && val !== null) ? val : entry.default;
+      if (entry.type === 'bool') {
+        el.checked = !!((val !== undefined && val !== null) ? val : entry.default);
+      } else {
+        el.value = (val !== undefined && val !== null) ? val : entry.default;
+      }
     }
   }
 
@@ -899,15 +996,19 @@
     for (const entry of _schema) {
       const el = document.getElementById(schemaInputId(entry.path));
       if (!el) continue;
-      const raw = el.value;
       let val;
-      if (entry.type === 'int') { val = parseInt(raw, 10); if (!Number.isFinite(val)) val = entry.default; }
-      else if (entry.type === 'float') { val = parseFloat(raw); if (!Number.isFinite(val)) val = entry.default; }
-      else { val = raw; } // string
-      // clamp numeric
-      if (entry.type !== 'string') {
-        if (typeof entry.min === 'number' && val < entry.min) val = entry.min;
-        if (typeof entry.max === 'number' && val > entry.max) val = entry.max;
+      if (entry.type === 'bool') {
+        val = !!el.checked;
+      } else {
+        const raw = el.value;
+        if (entry.type === 'int') { val = parseInt(raw, 10); if (!Number.isFinite(val)) val = entry.default; }
+        else if (entry.type === 'float') { val = parseFloat(raw); if (!Number.isFinite(val)) val = entry.default; }
+        else { val = raw; } // string / textarea
+        // clamp numeric only
+        if (entry.type === 'int' || entry.type === 'float') {
+          if (typeof entry.min === 'number' && val < entry.min) val = entry.min;
+          if (typeof entry.max === 'number' && val > entry.max) val = entry.max;
+        }
       }
       setPath(settings, entry.path, val);
       if (entry.restart) needsRestart = true;

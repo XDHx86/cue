@@ -91,6 +91,9 @@ function validateDescriptor(desc) {
   if (desc.supportedModels != null && !Array.isArray(desc.supportedModels) && typeof desc.supportedModels !== 'function') {
     throw new Error(`provider "${desc.id}": supportedModels must be an array, a function, or null`);
   }
+  if (desc.modelSettingsPath !== undefined && desc.modelSettingsPath !== null && typeof desc.modelSettingsPath !== 'string') {
+    throw new Error(`provider "${desc.id}": modelSettingsPath must be a string, null, or absent`);
+  }
 }
 
 // Register a provider descriptor. Returns an unsubscribe so tests can roll a provider back; the app
@@ -137,6 +140,7 @@ function renderSafe(desc) {
     providerType: desc.providerType,
     capabilities: desc.capabilities || {},
     supportedModels: desc.supportedModels || null,
+    modelSettingsPath: desc.modelSettingsPath || null,
     configurableSettings: desc.configurableSettings || [],
     defaultSettings: desc.defaultSettings || {},
     order: desc.order || 0,

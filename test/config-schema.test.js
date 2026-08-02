@@ -10,8 +10,11 @@ test('every schema entry has required fields', () => {
     assert.ok(e.type, `entry ${e.path} missing type`);
     assert.ok(typeof e.default === 'number' || typeof e.default === 'boolean' || typeof e.default === 'string',
       `entry ${e.path} default is not a primitive`);
-    assert.ok(typeof e.min === 'number', `entry ${e.path} missing min`);
-    assert.ok(typeof e.max === 'number', `entry ${e.path} missing max`);
+    // min/max apply only to numeric types; string/bool entries legitimately have none.
+    if (e.type === 'int' || e.type === 'float') {
+      assert.ok(typeof e.min === 'number', `entry ${e.path} missing min`);
+      assert.ok(typeof e.max === 'number', `entry ${e.path} missing max`);
+    }
     assert.ok(e.tier === 'ui', `entry ${e.path} has invalid tier: ${e.tier}`);
   }
 });
@@ -118,6 +121,51 @@ test('uiEntries returns only ui-tier entries with safe fields', () => {
   assert.ok(paths.includes('llm.maxTokens'), 'should include llm.maxTokens');
   assert.ok(paths.includes('ui.zoomMin'), 'should include ui.zoomMin');
   assert.ok(paths.includes('stt.maxSpawnFailures'), 'should include stt.maxSpawnFailures');
+});
+
+test('uiEntries passes kind/type so the renderer renders strings, bools, and textareas', () => {
+  const ui = uiEntries();
+  const byPath = Object.fromEntries(ui.map((e) => [e.path, e]));
+  // Textarea entries (preprompt templates) must carry kind:'textarea'.
+  const concise = byPath['promptOverrides.prepromptTemplates.concise'];
+  assert.ok(concise, 'preprompt concise template missing from uiEntries');
+  assert.equal(concise.kind, 'textarea', 'textarea entries must pass kind through uiEntries');
+  assert.equal(concise.type, 'string');
+  // Logging fields: string and bool types must pass through.
+  const lvl = byPath['stt.logging.level'];
+  assert.ok(lvl, 'stt.logging.level missing from uiEntries');
+  assert.equal(lvl.type, 'string', 'logging.level must be string type');
+  const con = byPath['stt.logging.console'];
+  assert.ok(con, 'stt.logging.console missing from uiEntries');
+  assert.equal(con.type, 'bool', 'logging.console must be bool type');
+});
+
+test('screen.contentProtection exists and defaults to true (capture exclusion stays on)', () => {
+  const defaults = schemaDefaults();
+  assert.equal(getNested(defaults, 'screen.contentProtection'), true,
+    'contentProtection must default true so existing users keep capture exclusion');
+  const ui = uiEntries();
+  const entry = ui.find((e) => e.path === 'screen.contentProtection');
+  assert.ok(entry, 'contentProtection must be a ui entry');
+  assert.equal(entry.type, 'bool');
+  assert.equal(entry.default, true);
+  assert.equal(entry.tab, 'advanced');
+  assert.equal(entry.section, 'Screen Capture');
+});
+
+test('validate coerces screen.contentProtection to a bool', () => {
+  // Missing key → !!undefined = false (validate only coerces, defaults come from deepMerge in store)
+  const data = { screen: { contentProtection: 0 } };
+  validate(data);
+  assert.equal(data.screen.contentProtection, false);
+  // Once filled by deepMerge(store.DEFAULTS), validate leaves true untouched
+  const data2 = { screen: { contentProtection: true } };
+  validate(data2);
+  assert.equal(data2.screen.contentProtection, true);
+  // Truthy string coerces to true
+  const data3 = { screen: { contentProtection: 'yes' } };
+  validate(data3);
+  assert.equal(data3.screen.contentProtection, true);
 });
 
 // (buildEnvMap removed — .env system eliminated)

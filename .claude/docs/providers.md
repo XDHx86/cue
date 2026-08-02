@@ -60,6 +60,7 @@ from audio-capable keys, **openai → gemini**, and falls across providers on er
 |---|---|---|---|
 | faster-whisper (local) | yes | yes | Managed Python service (venv spawn + JSON-RPC). Order 10. |
 | assemblyai | yes | no | `wss://streaming.assemblyai.com/v3/ws`. Auth via `Authorization` header (raw API key). Audio: pcm_s16le binary frames (~50ms chunks). Reconnect with exponential backoff; latches after 3 failures. Order 15. |
+| deepgram | yes | yes | `wss://api.deepgram.com/v1/listen` (streaming) + `POST https://api.deepgram.com/v1/listen` (batch). Auth via `Authorization: Token <key>`. Binary Int16 PCM streaming; raw WAV batch. Hand-rolled WsClient (no SDK). Reconnect with exponential backoff; latches after 3 failures. Order 17. |
 | openai | no | yes | Whisper API (`audio.transcriptions`). Order 20. |
 | groq | no | yes | OpenAI-compatible endpoint (`api.groq.com/openai/v1`). Uses `openai` SDK with custom `baseURL`. Fast inference. Order 25. |
 | gemini | no | yes | `generateContent` with inline audio. Order 30. |

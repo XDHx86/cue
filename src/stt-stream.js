@@ -36,13 +36,12 @@ function resolveProvider(settings, { localReady = false } = {}) {
   const streaming = listProviders('stt').filter((p) => p.capabilities && p.capabilities.streaming);
 
   if (want === 'batch') return { provider: 'batch', available: false };
-  if (want === 'deepgram') return { provider: 'deepgram', available: false };
 
   for (const desc of streaming) {
     // For explicit transport names (not 'auto' or legacy aliases), only match by exact id.
     // This prevents e.g. 'assemblyai' from accidentally matching the local faster-whisper
     // provider when localReady is true and local happens to be first in the order.
-    const LEGACY_ALIASES = ['auto', 'batch', 'deepgram', 'local', 'faster-whisper'];
+    const LEGACY_ALIASES = ['auto', 'batch', 'local', 'faster-whisper'];
     if (!LEGACY_ALIASES.includes(want) && desc.id !== want) continue;
     // Legacy capability-based matching for 'local' and 'faster-whisper'
     if (want === 'local' && !desc.capabilities.local) continue;

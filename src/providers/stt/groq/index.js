@@ -16,6 +16,7 @@ defineProvider({
   providerType: 'stt',
   order: 25, // between OpenAI Whisper (20) and Gemini (30)
   capabilities: { batch: true, streaming: false },
+  modelSettingsPath: 'stt.groqModel',
   supportedModels: () => [
     { id: 'whisper-large-v3-turbo', label: 'Whisper Large v3 Turbo' },
     { id: 'whisper-large-v3', label: 'Whisper Large v3' },

@@ -91,6 +91,7 @@
             <div class="s-field"><span>Ollama</span><input id="key-ollama" type="password" placeholder="No key needed (local)" autocomplete="off" disabled /></div>
             <div class="s-field"><span>AssemblyAI</span><input id="key-assemblyai" type="password" placeholder="AssemblyAI API key" autocomplete="off" /></div>
             <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
+            <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg_..." autocomplete="off" /></div>
 
             <label class="s-label" for="ollama-baseurl">Ollama base URL <span class="s-hint">OpenAI-compatible /v1 endpoint of your local <code>ollama serve</code></span></label>
             <div class="s-field"><span>URL</span><input id="ollama-baseurl" type="text" placeholder="http://localhost:11434/v1" autocomplete="off" /></div>
@@ -103,27 +104,6 @@
               <button data-stt-enabled="on">On</button>
               <button data-stt-enabled="off">Off</button>
             </div>
-            <div class="s-field">
-              <span>Transport</span>
-              <select id="stt-provider" class="s-select">
-                <option value="auto">Auto (local → external → batch)</option>
-                <option value="local">Local (managed engine)</option>
-                <option value="assemblyai">AssemblyAI (cloud streaming)</option>
-                <option value="faster-whisper">External (own WS server)</option>
-                <option value="batch">Batch (cloud) only</option>
-              </select>
-            </div>
-            <div class="s-field">
-              <span>Engine</span>
-              <select id="stt-engine" class="s-select"></select>
-            </div>
-            <div class="s-field">
-              <span>Model</span>
-              <select id="stt-model" class="s-select"></select>
-              <button id="stt-model-download" class="stt-mini" type="button">Download</button>
-              <button id="stt-model-delete" class="stt-mini" type="button">Delete</button>
-            </div>
-            <div class="s-resume-actions"><span class="s-hint" id="stt-model-status"></span><button id="stt-prepare" type="button">Prepare service</button></div>
             <div class="s-seg" id="stt-device-seg">
               <button data-device="auto">Auto</button>
               <button data-device="cpu">CPU</button>
@@ -169,6 +149,17 @@
             <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
             <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
             <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
+
+            <label class="s-label">Transcription <span class="s-hint">STT provider and model for voice transcription</span></label>
+            <div class="s-field"><span>Provider</span>
+              <select id="stt-provider" class="s-select"></select>
+            </div>
+            <div class="s-field" id="stt-model-field"><span>Model</span>
+              <select id="stt-model" class="s-select"></select>
+              <button id="stt-model-download" class="stt-mini" type="button">Download</button>
+              <button id="stt-model-delete" class="stt-mini" type="button">Delete</button>
+            </div>
+            <div class="s-resume-actions"><span class="s-hint" id="stt-model-status"></span><button id="stt-prepare" type="button">Prepare service</button></div>
           </section>
 
           <!-- Context (assistant style + résumé + skills + memory notes) -->

@@ -4,8 +4,9 @@ const test = require('node:test');
 const {
   encodeJsonLine, parseJsonLine, RpcChannel,
   pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash, buildPyLogEnv,
-  createSttProcessManager, MAX_SPAWN_FAILURES,
+  createSttProcessManager, MAX_SPAWN_FAILURES, DEFAULT_ENGINE_SPEC,
 } = require('../src/stt-process');
+const path = require('node:path');
 
 // ---- framing ----
 test('encodeJsonLine appends a newline and round-trips through parseJsonLine', () => {
@@ -355,4 +356,84 @@ test('manager buffers a Python JSON log split across pipe chunks into one forwar
   const errs = rec._calls.filter((c) => c.lvl === 'error');
   assert.equal(errs.length, 1, 'reassembled into exactly one forwarded error line');
   assert.equal(errs[0].m, 'partial chunk ok');
+});
+
+// ---- generalized engine spec (multi-manager: faster-whisper + FunASR) ----
+// The manager grew up hardcoded to faster-whisper; threading an engine "spec" (script /
+// requirements / venv dir name / models dir name / verify import) lets a SECOND offline
+// engine (FunASR) run its own isolated service with its own venv, so a torch-vs-CTranslate2
+// stack never collides. The defaults are byte-for-byte the old literals (backward-compat),
+// and the verify-import surface lets each engine report its own version string. The happy
+// path is driven by a fake child that round-trips the `hello` handshake back; `ensureVenv`
+// is not exercised here (no Python is spawned) — the venv is pre-injected, as in the
+// lifecycle tests above.
+
+test('DEFAULT_ENGINE_SPEC points at the faster-whisper script + venv (backward-compat default)', () => {
+  assert.equal(DEFAULT_ENGINE_SPEC.venvDirName, 'stt-venv');
+  assert.equal(DEFAULT_ENGINE_SPEC.modelsDirName, 'stt-models');
+  assert.ok(DEFAULT_ENGINE_SPEC.scriptPath.endsWith('cue_stt_service.py'),
+    'default script is the faster-whisper service');
+  assert.ok(DEFAULT_ENGINE_SPEC.requirementsPath.endsWith('requirements.txt'),
+    'default requirements is python/requirements.txt');
+  assert.match(DEFAULT_ENGINE_SPEC.verifyImport, /faster_whisper/, 'verify probe imports faster-whisper');
+});
+
+test('buildVenvPlan honors a custom venvDirName so each engine gets an isolated venv', () => {
+  const fs = memFs({});
+  const plan = buildVenvPlan({ userDataPath: '/ud', platform: 'win32', fs, reqsHash: 'h',
+                               venvDirName: 'stt-venv-funasr' });
+  assert.equal(plan.venvPython.replace(/\\/g, '/'), '/ud/stt-venv-funasr/Scripts/python.exe',
+    'a funasr venv lives in its own dir, never the faster-whisper one');
+  assert.equal(plan.create, true);
+});
+
+test('requirementsHash reads the spec-supplied requirements file, isolating an engine install marker', () => {
+  // A funasr-style requirements file pins its own marker, independent of faster-whisper's.
+  const funasrReqs = path.join(__dirname, '..', 'python', 'requirements-funasr.txt');
+  const fs = memFs({ [funasrReqs]: 'funasr==1.0\ntorch==2.1.0\n' });
+  const funasrHash = requirementsHash(fs, funasrReqs);
+  assert.equal(/[0-9a-f]{40}/.test(funasrHash), true, '40-hex sha1 of the funasr requirements');
+  // A different requirements file yields a different hash → a marker mismatch correctly re-installs.
+  const fsFw = memFs({ [require('node:path').join(__dirname, '..', 'python', 'requirements.txt')]: 'faster-whisper==1.1.1\n' });
+  const fwHash = requirementsHash(fsFw);
+  assert.notEqual(funasrHash, fwHash, 'two engines => two independent install markers');
+});
+
+test('a manager built with a funasr spec spawns that engine\'s script + verify-import, not faster-whisper', async () => {
+  const funasrSpec = {
+    requirementsPath: path.join(__dirname, '..', 'python', 'requirements-funasr.txt'),
+    scriptPath: '/srv/cue_stt_funasr_service.py',
+    venvDirName: 'stt-venv-funasr',
+    modelsDirName: 'stt-models-funasr',
+    verifyImport: 'import funasr, torch; print(funasr.__version__); print(torch.__version__); print(torch.cuda.is_available())',
+  };
+  let spawnedWith = null;
+  const m = createSttProcessManager({
+    spawn: (exe, args) => { spawnedWith = { exe, args }; return makeEchoChild(); },
+    spawnSync: () => ({ status: 0 }),
+    fs: memFs({}),
+    getPath: () => '/ud',
+    log: () => {},
+    spec: funasrSpec,
+  });
+  m._setVenv({ venvPython: '/v/bin/python', pythonVersion: '3.11.2' });
+
+  function makeEchoChild() {
+    const dataCbs = [];
+    const child = {
+      stdin: { destroyed: false, write(line) { const o = parseJsonLine(line.trim()); if (o && o.id) setImmediate(() => dataCbs.forEach((cb) => cb(Buffer.from(JSON.stringify({ id: o.id, ok: true, result: { python_version: '3.11.2', cuda: true } }) + '\n')))); }, end() {} },
+      stdout: { on(ev, cb) { if (ev === 'data') dataCbs.push(cb); } },
+      stderr: { on() {} },
+      on() {}, kill() {}, killed: false,
+    };
+    return child;
+  }
+
+  assert.equal(await m.start(), true, 'starts with the funasr service');
+  assert.ok(spawnedWith, 'spawn was called');
+  assert.deepEqual(spawnedWith.args, ['-u', '/srv/cue_stt_funasr_service.py'],
+    'spawned the funasr SCRIPT, not the default faster-whisper one');
+  assert.equal(m.getModelsDir().replace(/\\/g, '/'), '/ud/stt-models-funasr',
+    'models dir derives from the spec modelsDirName');
+  m.stop();
 });

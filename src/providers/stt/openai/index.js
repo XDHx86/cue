@@ -13,6 +13,7 @@ defineProvider({
   providerType: 'stt',
   order: 20,
   capabilities: { batch: true, streaming: false },
+  modelSettingsPath: 'stt.model',
   supportedModels: () => [
     { id: 'whisper-1', label: 'Whisper v1' },
     { id: 'gpt-4o-mini-transcribe', label: 'GPT-4o Mini Transcribe' },

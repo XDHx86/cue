@@ -112,6 +112,14 @@ const SCHEMA = [
 
   // ---- Screen Capture (Advanced tab — power-user tuning) -------------------
   {
+    path: 'screen.contentProtection',
+    type: 'bool', default: true,
+    tier: 'ui', restart: false,
+    tab: 'advanced', section: 'Screen Capture',
+    label: 'Exclude from screen capture',
+    hint: 'On (default) the overlay is hidden from screen sharing and recording (setContentProtection). Turn off only for debugging screen-capture issues.',
+  },
+  {
     path: 'screen.maxEdge',
     type: 'int', default: 1568, min: 256, max: 4096,
     tier: 'ui', restart: false,
@@ -313,7 +321,7 @@ const SCHEMA = [
   // ---- Logging (Advanced tab — structured logging config) -------------------
   {
     path: 'stt.logging.level',
-    type: 'string', default: 'debug', min: 0, max: 20,
+    type: 'string', default: 'debug',
     tier: 'ui', restart: false,
     tab: 'advanced', section: 'Logging',
     label: 'Log level',
@@ -321,7 +329,7 @@ const SCHEMA = [
   },
   {
     path: 'stt.logging.logDir',
-    type: 'string', default: '', min: 0, max: 256,
+    type: 'string', default: '',
     tier: 'ui', restart: false,
     tab: 'advanced', section: 'Logging',
     label: 'Log directory',
@@ -505,6 +513,7 @@ function uiEntries() {
     section: e.section,
     label: e.label,
     hint: e.hint,
+    kind: e.kind,
   }));
 }
 

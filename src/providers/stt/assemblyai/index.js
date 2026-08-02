@@ -17,6 +17,7 @@ defineProvider({
   providerType: 'stt',
   order: 15, // between faster-whisper (local, 10) and openai (batch, 20)
   capabilities: { streaming: true, batch: false },
+  modelSettingsPath: 'stt.assemblyaiSpeechModel',
   supportedModels: () => [
     { id: '', label: 'Default' },
     { id: 'universal-3-5-pro', label: 'Universal 3.5 Pro' },

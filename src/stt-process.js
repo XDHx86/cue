@@ -52,8 +52,25 @@ function defaultGetPath(name) {
   return _boundGetPath(name);
 }
 
-const REQS_PATH = path.join(__dirname, '..', 'python', 'requirements.txt');
-const SCRIPT_PATH = path.join(__dirname, '..', 'python', 'cue_stt_service.py');
+// Engine spec: a managed Python service is fully described by where its requirements
+// file lives, which script to spawn, the venv/models dir names under userData, and a
+// `verifyImport` snippet run after pip-install to confirm the deps imported. The manager
+// grew up hardcoded to faster-whisper; threading this as an option lets a SECOND offline
+// engine (FunASR) run its own isolated service with its own venv — see
+// .claude/docs/decisions.md (ADR — multi-manager generalization). The faster-whisper
+// defaults below are byte-for-byte the old literals so existing behavior is unchanged.
+const DEFAULT_ENGINE_SPEC = {
+  requirementsPath: path.join(__dirname, '..', 'python', 'requirements.txt'),
+  scriptPath: path.join(__dirname, '..', 'python', 'cue_stt_service.py'),
+  venvDirName: 'stt-venv',
+  modelsDirName: 'stt-models',
+  // NOTE: kept in sync with python/cue_stt_service.py imports. The verify probe's stdout
+  // lines 1..3 feed diag.fasterWhisperVersion / cuda — see ensureVenv().
+  verifyImport: 'import faster_whisper, ctranslate2; '
+    + 'print(faster_whisper.__version__); '
+    + 'print(ctranslate2.__version__); '
+    + 'print(ctranslate2.get_cuda_device_count() > 0)',
+};
 
 const MAX_SPAWN_FAILURES = 3;
 const HELLO_TIMEOUT_MS = 8000;
@@ -173,9 +190,11 @@ function venvPythonPath(venvDir, platform) {
 
 // Decide what to do given the filesystem state. Pure (no spawning): callers run
 // the returned commands. `reqsHash` pins the install so a requirements.txt change
-// re-installs, but an unchanged hash is a no-op (fast startup).
-function buildVenvPlan({ userDataPath, platform, fs, reqsHash }) {
-  const venvDir = path.join(userDataPath, 'stt-venv');
+// re-installs, but an unchanged hash is a no-op (fast startup). `venvDirName` lets
+// each managed engine keep an isolated venv (faster-whisper: 'stt-venv', funasr:
+// 'stt-venv-funasr') so their torch-vs-CTranslate2 stacks never collide.
+function buildVenvPlan({ userDataPath, platform, fs, reqsHash, venvDirName = 'stt-venv' }) {
+  const venvDir = path.join(userDataPath, venvDirName);
   const venvPython = venvPythonPath(venvDir, platform);
   const marker = path.join(venvDir, 'cue-installed.txt');
   const exists = fs.existsSync(venvPython);
@@ -188,8 +207,13 @@ function buildVenvPlan({ userDataPath, platform, fs, reqsHash }) {
   return { venvDir, venvPython, marker, create, install, reqsHash };
 }
 
-function requirementsHash(fs) {
-  try { return crypto.createHash('sha1').update(fs.readFileSync(REQS_PATH, 'utf8')).digest('hex'); }
+// Pin the install to this requirements file's hash. Reads the injected path so an
+// engine's isolated requirements file (python/requirements-funasr.txt) controls its own
+// venv marker — an unchanged hash is a no-op, a requirements change re-installs. Defaults
+// to faster-whisper's requirements.txt for backward compatibility with the single-engine
+// callers/tests that pass only an fs.
+function requirementsHash(fs, requirementsPath = DEFAULT_ENGINE_SPEC.requirementsPath) {
+  try { return crypto.createHash('sha1').update(fs.readFileSync(requirementsPath, 'utf8')).digest('hex'); }
   catch { return ''; }
 }
 
@@ -227,9 +251,9 @@ function buildPyLogEnv(logging, pythonSettings, getPath) {
 }
 
 module.exports = {
-  REQS_PATH, SCRIPT_PATH,
   encodeJsonLine, parseJsonLine, RpcChannel,
   pickPython, parsePyVer, venvPythonPath, buildVenvPlan, requirementsHash, buildPyLogEnv,
+  DEFAULT_ENGINE_SPEC,
   PY_CANDIDATES, MAX_SPAWN_FAILURES, HELLO_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS,
 
   createSttProcessManager({ spawn, spawnSync, fs, getPath = defaultGetPath,
@@ -239,9 +263,14 @@ module.exports = {
     callTimeoutMs: callTimeoutParam,
     modelReloadTimeoutMs: reloadTimeoutParam,
     shutdownGraceMs: shutdownGraceParam,
+    spec: specParam = null,
     setTimeout: setTimer = global.setTimeout, clearTimeout: clearTimer = global.clearTimeout }) {
     const platform = process.platform;
-    let modelsDir = path.join(getPath('userData'), 'stt-models');
+    // Engine spec (script / requirements / venv name / models name / verify import). Null
+    // → faster-whisper defaults, so the existing single-engine callers — and the test
+    // suite — see byte-for-byte the old behavior.
+    const spec = specParam || DEFAULT_ENGINE_SPEC;
+    let modelsDir = path.join(getPath('userData'), spec.modelsDirName);
     // Module-scoped child so every log line carries module:'stt-process' without the
     // caller having to bind it each call. noopLogger.child() returns the same noop,
     // so tests pay nothing.
@@ -340,8 +369,8 @@ module.exports = {
       if (venv) return { ok: true, ...venv };
       const py = pickPython(spawnSync);
       if (!py) { diag.lastError = 'Python 3.10+ not found on PATH'; log.error(diag.lastError); return { ok: false, error: diag.lastError }; }
-      const reqsHash = requirementsHash(fs);
-      const plan = buildVenvPlan({ userDataPath: getPath('userData'), platform, fs, reqsHash });
+      const reqsHash = requirementsHash(fs, spec.requirementsPath);
+      const plan = buildVenvPlan({ userDataPath: getPath('userData'), platform, fs, reqsHash, venvDirName: spec.venvDirName });
       diag.pythonVersion = py.version;
       try {
         if (plan.create) {
@@ -355,11 +384,11 @@ module.exports = {
           }
         }
         if (plan.install) {
-          onVenvProgress('Installing faster-whisper (one-time, CPU)…');
-          log.info('installing faster-whisper dependencies');
+          onVenvProgress('Installing dependencies (one-time, CPU)…');
+          log.info({ requirements: spec.requirementsPath }, 'installing python dependencies');
           await new Promise((resolve, reject) => {
             const pip = spawn(plan.venvPython, ['-m', 'pip', 'install', '--disable-pip-version-check',
-                                                '-r', REQS_PATH], { stdio: ['ignore', 'pipe', 'pipe'] });
+                                                '-r', spec.requirementsPath], { stdio: ['ignore', 'pipe', 'pipe'] });
             let out = '';
             pip.stdout.on('data', (d) => { out += d.toString(); });
             pip.stderr.on('data', (d) => { out += d.toString(); });
@@ -368,23 +397,25 @@ module.exports = {
           });
           fs.writeFileSync(plan.marker, plan.reqsHash);
         }
-        // verify deps importable + capture faster-whisper / cuda info
-        const verify = spawnSync(plan.venvPython, ['-c',
-          'import faster_whisper, ctranslate2; '
-          + 'print(faster_whisper.__version__); '
-          + 'print(ctranslate2.__version__); '
-          + 'print(ctranslate2.get_cuda_device_count() > 0)'], { encoding: 'utf8' });
+        // verify this engine's deps import + capture version/cuda info. The verify probe
+        // is engine-specific (faster-whisper prints fw/ctranslate2 version + cuda count;
+        // funasr would print funasr/torch version + torch.cuda.is_available()).
+        const verify = spawnSync(plan.venvPython, ['-c', spec.verifyImport], { encoding: 'utf8' });
         if (verify.status !== 0) {
           diag.lastError = 'verify failed: ' + `${verify.stdout || ''}${verify.stderr || ''}`.trim();
           log.error({ error: diag.lastError }, 'dependency verification failed');
           return { ok: false, error: diag.lastError };
         }
         const lines = (verify.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+        // Line 1 = primary engine version, line 3 = cuda-availability bool. Engines with a
+        // different verify shape can be handled here later; for now this matches both the
+        // faster-whisper probe and a funasr `import funasr, torch; print(funasr.__version__);
+        // print(torch.__version__); print(torch.cuda.is_available())` probe.
         venv = { venvPython: plan.venvPython, pythonVersion: py.version,
                  fasterWhisperVersion: lines[0] || 'unknown', cuda: String(lines[2]) === 'True' };
         diag.fasterWhisperVersion = venv.fasterWhisperVersion;
         diag.cuda = venv.cuda;
-        log.info({ python: py.version, faster_whisper: venv.fasterWhisperVersion, cuda: venv.cuda },
+        log.info({ python: py.version, engine: venv.fasterWhisperVersion, cuda: venv.cuda },
                  'venv ready');
         return { ok: true, ...venv };
       } catch (e) {
@@ -401,8 +432,8 @@ module.exports = {
       // a resolved ABSOLUTE CUE_STT_LOG_DIR keeps the Node + Python rotating logs in one dir.
       const pyLogEnv = buildPyLogEnv(logging, pythonSettings, getPath);
       const env = Object.keys(pyLogEnv).length ? { ...process.env, ...pyLogEnv } : undefined;
-      child = spawn(venv.venvPython, ['-u', SCRIPT_PATH], { stdio: ['pipe', 'pipe', 'pipe'], env });
-      log.debug({ script: SCRIPT_PATH, venv: venv.venvPython }, 'spawning stt service');
+      child = spawn(venv.venvPython, ['-u', spec.scriptPath], { stdio: ['pipe', 'pipe', 'pipe'], env });
+      log.debug({ script: spec.scriptPath, venv: venv.venvPython }, 'spawning stt service');
       rx = '';
       child.stdout.on('data', onStdout);
       child.stderr.on('data', onStderr);

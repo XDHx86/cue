@@ -12,6 +12,7 @@ defineProvider({
   providerType: 'stt',
   order: 40,
   capabilities: { streaming: true, batch: false },
+  modelSettingsPath: null,
   supportedModels: () => null,
   configurableSettings: [
     { id: 'url', label: 'WebSocket URL', type: 'text', placeholder: 'ws://localhost:9080' },

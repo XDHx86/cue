@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('cue', {
   sttModelDownload: (model) => ipcRenderer.invoke('stt:model:download', model),
   sttModelDelete: (model) => ipcRenderer.invoke('stt:model:delete', model),
   sttEngineList: () => ipcRenderer.invoke('stt:engine:list'),
+  sttProvidersList: () => ipcRenderer.invoke('stt:providers'),
   // Assistant-style seg ↔ settings.promptOverrides.prePrompt shaping (src/preprompt.js). Sync,
   // pure — no IPC round-trip. The renderer has no Node `require`, so this is how it reaches the
   // same canonical helper main's composeSystem resolves with (resolveField('prePrompt')).

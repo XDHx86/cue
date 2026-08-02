@@ -108,6 +108,19 @@ test('migrates a legacy top-level sttModel into stt.model and drops the old key'
   assert.equal(s2.stt.model, 'whisper-large', 'explicit stt.model wins over the legacy sttModel');
 });
 
+test('migrates legacy transport faster-whisper to external-ws provider id', () => {
+  fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({ stt: { provider: 'faster-whisper' } }));
+  delete require.cache[require.resolve('../src/store')];
+  store = require('../src/store');
+  const s = store.getSettings();
+  assert.equal(s.stt.provider, 'external-ws', 'transport faster-whisper migrated to external-ws');
+  // explicit external-ws is not re-migrated
+  fs.writeFileSync(path.join(tmpDir, 'cue-data.json'), JSON.stringify({ stt: { provider: 'external-ws' } }));
+  delete require.cache[require.resolve('../src/store')];
+  store = require('../src/store');
+  assert.equal(store.getSettings().stt.provider, 'external-ws');
+});
+
 // ---- phase-4 composition defaults (pre-prompt, skills, memory, résumé digest) ----
 
 test('composition defaults exist: promptOverrides, skillDir, skillEnabled, memory.notes, resumeSummary', () => {
@@ -316,7 +329,7 @@ test('validatePatch catches unknown STT provider', () => {
 
 test('validatePatch accepts valid STT providers', () => {
   const { validatePatch } = require('../src/store');
-  for (const p of ['auto', 'local', 'faster-whisper', 'batch', 'assemblyai', 'groq']) {
+  for (const p of ['auto', 'batch', 'faster-whisper', 'funasr', 'assemblyai', 'deepgram', 'openai', 'groq', 'gemini', 'external-ws']) {
     const errors = validatePatch({ stt: { provider: p } });
     assert.ok(!errors.some((e) => e.includes('STT provider')), p + ' should be valid');
   }

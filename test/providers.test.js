@@ -53,12 +53,27 @@ function loadReal() {
   loader.loadProviders({ _require: require });
 }
 
-test('loading the real src/providers tree registers the 5 LLM providers and 6 STT providers', () => {
+test('loading the real src/providers tree registers the 5 LLM providers and 8 STT providers', () => {
   loadReal();
   const ids = registry.listProviders('llm').map((d) => d.id);
   assert.deepEqual(ids, ['openai', 'anthropic', 'gemini', 'nvidia', 'ollama'], 'LLM ids + order');
   const sttIds = registry.listProviders('stt').map((d) => d.id);
-  assert.deepEqual(sttIds, ['faster-whisper', 'assemblyai', 'openai', 'groq', 'gemini', 'external-ws'], 'STT ids + order');
+  assert.deepEqual(sttIds, ['funasr', 'faster-whisper', 'assemblyai', 'deepgram', 'openai', 'groq', 'gemini', 'external-ws'], 'STT ids + order');
+});
+
+test('every STT provider declares modelSettingsPath (string or null)', () => {
+  loadReal();
+  const withPath = ['funasr', 'faster-whisper', 'assemblyai', 'deepgram', 'openai', 'groq'];
+  const withoutPath = ['gemini', 'external-ws'];
+  for (const id of withPath) {
+    const d = registry.getProvider('stt', id);
+    assert.equal(typeof d.modelSettingsPath, 'string', id + ' has a string modelSettingsPath');
+    assert.ok(d.modelSettingsPath.startsWith('stt.'), id + ' path starts with stt.');
+  }
+  for (const id of withoutPath) {
+    const d = registry.getProvider('stt', id);
+    assert.equal(d.modelSettingsPath, null, id + ' has null modelSettingsPath');
+  }
 });
 
 test('every LLM descriptor validates and has a render-safe, function-bearing createEngine', () => {

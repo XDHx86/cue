@@ -10,8 +10,7 @@ const { DEFAULT_PRE_PROMPT_TEMPLATE } = require('./prompt-registry');
 // defaults — no per-provider fan-out here. loadProviders() is pure at load time (provider modules
 // lazy-require their network SDK INSIDE createEngine, and the logger spawns no transport on
 // require), so calling it while building DEFAULTS pulls no SDK and no Electron. STT providers
-// aren't registered yet (no src/providers/stt tree — R2), so only LLM defaults fold in; the STT-
-// owned apiKeys.deepgram seed stays a literal here until R2's deepgram provider contributes it.
+// (including deepgram) fold their apiKeys and STT-owned settings via foldSttDefaults() below.
 const registry = require('./registry');
 const { loadProviders } = require('./registry-loader');
 loadProviders({ _require: require });
@@ -53,9 +52,8 @@ const BASE_DEFAULTS = {
   // requires a non-empty apiKey, Ollama ignores it, and a non-empty value stops the auto-switch
   // below from flipping away from a user-selected ollama just because the key isn't "real". The
   // LLM provider descriptors (src/providers/llm/*/index.js) contribute every apiKeys/models slot
-  // for the 5 LLM providers via foldLlmDefaults() below; deepgram is an STT key (R2 wires it) and
-  // stays a literal seed here so ENV override CUE_DEEPGRAM_API_KEY has a node to land on today.
-  apiKeys: { deepgram: '' },
+  // for the 5 LLM providers via foldLlmDefaults() below; deepgram's apiKeys seed is contributed
+  // by the deepgram STT provider via foldSttDefaults().
   models: {},
   // Ollama base URL — `ollama serve` exposes an OpenAI-compatible /v1 endpoint. Empty falls
   // back to http://localhost:11434/v1 in the ollama provider. Set via Settings or
@@ -70,7 +68,6 @@ const BASE_DEFAULTS = {
   stt: {
     provider: 'auto',
     enabled: true,                 // master STT toggle (Settings)
-    deepgramURL: 'wss://api.deepgram.com/v1/listen',
     // Structured STT logging (Pino on the Node side, Loguru in the spawned Python
     // service — src/logger.js / python/cue_stt_logging.py, ADR-014). `logDir` '' →
     // userData/logs (resolved lazily by the logger, so store.load() needs no Electron).
@@ -155,6 +152,12 @@ function load() {
     delete data.sttModel;
   }
 
+  // One-time migration: legacy transport 'faster-whisper' mapped to the external-ws provider;
+  // the new registry-driven UI uses the provider id directly.
+  if (data.stt && data.stt.provider === 'faster-whisper') {
+    data.stt.provider = 'external-ws';
+  }
+
   // One-time migration: older cue stored the assistant-style selection at top-level `prePrompt`
   // (custom text) + `prePromptTemplate` (selected built-in id, or 'custom'). Move both into the
   // new `promptOverrides.prePrompt` home used by src/prompt-registry.js, only synthesizing a value
@@ -225,10 +228,14 @@ function validatePatch(patch) {
   if (keys.groq && typeof keys.groq === 'string' && !/^gsk_/.test(keys.groq)) {
     errors.push('Groq key should start with "gsk_"');
   }
+  if (keys.deepgram && typeof keys.deepgram === 'string' && keys.deepgram.length < 20) {
+    errors.push('Deepgram key seems too short (expected ~40+ chars)');
+  }
 
-  // STT provider validation
+  // STT provider validation — transport pseudo-modes + all registered STT providers.
   if (patch.stt && patch.stt.provider) {
-    const validProviders = ['auto', 'local', 'faster-whisper', 'batch', 'assemblyai', 'groq'];
+    const registeredIds = registry.listProviders('stt').map((p) => p.id);
+    const validProviders = ['auto', 'batch', ...registeredIds];
     if (!validProviders.includes(patch.stt.provider)) {
       errors.push('Unknown STT provider: ' + patch.stt.provider);
     }
