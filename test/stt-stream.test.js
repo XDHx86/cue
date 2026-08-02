@@ -166,9 +166,12 @@ test("createStreamSTT 'local' builds an engine session via the wired manager; nu
 // then immediately streams a partial and a final text frame to the client (the protocol cue's
 // session listens for). This exercises encodeFrame/decodeFrame + WsClient + the session's
 // JSON-dispatch path end to end.
-function loopbackServer(port) {
+function loopbackServer() {
   return new Promise((resolve) => {
+    const sockets = new Set();
     const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
       let rx = Buffer.alloc(0); let upgraded = false;
       socket.on('data', (d) => {
         rx = Buffer.concat([rx, d]);
@@ -195,6 +198,10 @@ function loopbackServer(port) {
       });
       socket.on('error', () => {});
     });
+    // Expose tracked sockets so tests can force-destroy before server.close() (Node has no
+    // public closeAllConnections in this version; destroying ensures the server's close event
+    // fires promptly without relying on the client to cleanly tear down).
+    server._destroySockets = () => { for (const s of sockets) { try { s.destroy(); } catch {} } };
     server.listen(0, '127.0.0.1', () => resolve(server));
   });
 }
@@ -209,14 +216,20 @@ test('session handshake -> live partial + final frames round-trip over a real so
 
   session.start();
 
+  // Wait for a finalized transcript (up to 2 s), with both timers always cleared on exit so the
+  // process doesn't hang on a leaked interval.
+  let poll, guard;
   await new Promise((resolve) => {
-    const to = setTimeout(() => resolve(), 2000);
-    const check = setInterval(() => {
-      if (got.final.length > 0) { clearTimeout(to); clearInterval(check); resolve(); }
+    guard = setTimeout(() => { clearInterval(poll); resolve(); }, 2000);
+    poll = setInterval(() => {
+      if (got.final.length > 0) { clearTimeout(guard); clearInterval(poll); resolve(); }
     }, 10);
   });
 
+  // Tear down: close the WS session (destroys the client socket), then force-destroy any
+  // sockets the server still holds so net.Server.close() fires its callback promptly.
   session.close();
+  server._destroySockets();
   server.close();
   await new Promise((r) => server.once('close', r));
 

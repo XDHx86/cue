@@ -33,7 +33,13 @@ const {
 function resolveProvider(settings, { localReady = false } = {}) {
   const cfg = settings.stt || {};
   const want = cfg.provider || 'auto';
-  const streaming = listProviders('stt').filter((p) => p.capabilities && p.capabilities.streaming);
+  // Handle both rich capability objects ({ state: 'supported' }) from the R3 plugin system
+  // and legacy boolean `true` for backward-compat. Rich objects are truthy even when
+  // state is 'unsupported', so we must check the state field explicitly.
+  const streaming = listProviders('stt').filter((p) => {
+    const c = p.capabilities && p.capabilities.streaming;
+    return c && (c === true || c.state === 'supported');
+  });
 
   if (want === 'batch') return { provider: 'batch', available: false };
 

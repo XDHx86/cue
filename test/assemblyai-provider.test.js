@@ -419,7 +419,10 @@ describe('AssemblyAI provider — registration', () => {
     assert.equal(desc.displayName, 'AssemblyAI');
     assert.equal(desc.providerType, 'stt');
     assert.equal(desc.order, 15);
-    assert.deepEqual(desc.capabilities, { streaming: true, batch: false });
+    assert.deepEqual(desc.capabilities, {
+      streaming: { state: 'supported', source: 'declared' },
+      batch: { state: 'unsupported', source: 'declared' },
+    });
     assert.equal(typeof desc.createEngine, 'function');
     assert.equal(typeof desc.createStreamSession, 'function');
     assert.equal(typeof desc.streamingReady, 'function');

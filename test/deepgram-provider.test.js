@@ -438,7 +438,10 @@ describe('Deepgram provider — registration', () => {
     assert.equal(desc.displayName, 'Deepgram');
     assert.equal(desc.providerType, 'stt');
     assert.equal(desc.order, 17);
-    assert.deepEqual(desc.capabilities, { streaming: true, batch: true });
+    assert.deepEqual(desc.capabilities, {
+      streaming: { state: 'supported', source: 'declared' },
+      batch: { state: 'supported', source: 'declared' },
+    });
     assert.equal(typeof desc.createEngine, 'function');
     assert.equal(typeof desc.createStreamSession, 'function');
     assert.equal(typeof desc.streamingReady, 'function');

@@ -31,9 +31,9 @@ test('ollama STT provider is registered with correct metadata', () => {
   assert.equal(ollamaStt.id, 'ollama');
   assert.equal(ollamaStt.providerType, 'stt');
   assert.equal(ollamaStt.displayName, 'Ollama STT (local)');
-  assert.equal(ollamaStt.capabilities.batch, true);
-  assert.equal(ollamaStt.capabilities.streaming, true);
-  assert.equal(ollamaStt.capabilities.local, true);
+  assert.deepEqual(ollamaStt.capabilities.batch, { state: 'supported', source: 'declared' });
+  assert.deepEqual(ollamaStt.capabilities.streaming, { state: 'supported', source: 'declared' });
+  assert.deepEqual(ollamaStt.capabilities.local, { state: 'supported', source: 'declared' });
   assert.equal(ollamaStt.modelSettingsPath, null, 'no unique model slot — uses stt.local.*');
   assert.deepEqual(ollamaStt.configurableSettings, [], 'no unique settings');
 });

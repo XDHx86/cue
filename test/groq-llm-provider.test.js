@@ -12,8 +12,8 @@ test('groq LLM provider is registered with correct metadata', () => {
   assert.equal(groq.id, 'groq');
   assert.equal(groq.providerType, 'llm');
   assert.equal(groq.displayName, 'Groq');
-  assert.equal(groq.capabilities.streaming, true);
-  assert.equal(groq.capabilities.vision, false);
+  assert.deepEqual(groq.capabilities.streaming, { state: 'supported', source: 'declared' });
+  assert.deepEqual(groq.capabilities.vision, { state: 'unsupported', source: 'declared' });
   assert.ok(groq.supportedModels.length > 0, 'has supported models');
 });
 

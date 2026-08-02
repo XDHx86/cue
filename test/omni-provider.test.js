@@ -18,8 +18,8 @@ test('omni LLM provider is registered with correct metadata', () => {
   assert.equal(omniLlm.id, 'omni');
   assert.equal(omniLlm.providerType, 'llm');
   assert.equal(omniLlm.displayName, 'OmniRoute (local)');
-  assert.equal(omniLlm.capabilities.streaming, true);
-  assert.equal(omniLlm.capabilities.vision, true);
+  assert.deepEqual(omniLlm.capabilities.streaming, { state: 'supported', source: 'declared' });
+  assert.deepEqual(omniLlm.capabilities.vision, { state: 'supported', source: 'declared' });
 });
 
 test('omni LLM engine is not ready without health check (cold cache)', () => {
@@ -69,8 +69,8 @@ test('omni STT provider is registered with correct metadata', () => {
   assert.equal(omniStt.id, 'omni');
   assert.equal(omniStt.providerType, 'stt');
   assert.equal(omniStt.displayName, 'OmniRoute STT (local)');
-  assert.equal(omniStt.capabilities.batch, true);
-  assert.equal(omniStt.capabilities.streaming, false);
+  assert.deepEqual(omniStt.capabilities.batch, { state: 'supported', source: 'declared' });
+  assert.deepEqual(omniStt.capabilities.streaming, { state: 'unsupported', source: 'declared' });
 });
 
 test('omni STT engine is not ready without health check (cold cache)', () => {

@@ -205,7 +205,7 @@ cue is an [Electron](https://www.electronjs.org/) app. Everything runs locally e
 
 Both audio streams are transcribed — by a **managed local faster-whisper** service by default (`auto`), falling back to **AssemblyAI** (cloud streaming), cloud Whisper/Groq/Gemini, or by an external server you run — and fed, with an optional screenshot, to your AI model. Responses **stream** into the panel word-by-word.
 
-**The invisibility** is a single macOS window flag: `setContentProtection(true)`, which sets `NSWindowSharingNone`. This asks the window server to exclude cue from screen-capture streams. It's the same mechanism DRM apps and Zoom's own toolbar use. It is **not** a GPU trick or a special overlay layer — and on macOS 15.4+ Apple lets some capture tools ignore it, which is why it's best-effort (see the disclaimer at the top).
+**The invisibility** is a single macOS window flag: `setContentProtection(true)`, which sets `NSWindowSharingNone`. This asks the window server to exclude cue from screen-capture streams. It's the same mechanism DRM apps and Zoom's own toolbar use. It is **not** a GPU trick or a special overlay layer — and on macOS 15.4+ Apple lets some capture tools ignore it, which is why it's best-effort (see the disclaimer at the top). It can also be toggled in Advanced Settings ("Exclude from screen capture"). **For development**, `CUE_NO_PROTECT=1` forces protection off (the overlay appears in screen captures) regardless of settings — handy for screenshotting the UI; it honors only explicit truthy values, so `CUE_NO_PROTECT=0` leaves protection on.
 
 ```
 main process ──┬─ overlay window (frameless, transparent, always-on-top, content-protected)

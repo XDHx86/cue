@@ -117,7 +117,7 @@ const SCHEMA = [
     tier: 'ui', restart: false,
     tab: 'advanced', section: 'Screen Capture',
     label: 'Exclude from screen capture',
-    hint: 'On (default) the overlay is hidden from screen sharing and recording (setContentProtection). Turn off only for debugging screen-capture issues.',
+    hint: 'On (default) the overlay is hidden from screen sharing and recording (setContentProtection). Turn off only for debugging screen-capture issues; CUE_NO_PROTECT=1 forces it off regardless (dev override).',
   },
   {
     path: 'screen.maxEdge',

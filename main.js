@@ -9,6 +9,7 @@ const store = require('./src/store');
 const { loadProviders } = require('./src/registry-loader');
 loadProviders({ _require: require });
 const { captureScreenshot } = require('./src/screen');
+const { captureProtectionEnabled } = require('./src/capture-protection');
 const { createSTT } = require('./src/stt');
 const { createStreamSTT } = require('./src/stt-stream');
 // Managed local STT engine (src/stt-engine.js) backed by a spawned Python process
@@ -141,9 +142,9 @@ function sttTranscribeTimeout() { const s = store.getSettings(); return (s.stt &
 // window is hidden from screen sharing/recording via setContentProtection. The CUE_NO_PROTECT
 // env var remains as a last-resort debug override (forces protection off regardless of settings).
 function contentProtectionEnabled() {
-  const s = store.getSettings();
-  const on = !(s && s.screen) || s.screen.contentProtection !== false; // default true (also for missing key)
-  return on && !process.env.CUE_NO_PROTECT;
+  // Pure decision in src/capture-protection.js (unit-tested without electron). CUE_NO_PROTECT is
+  // honored only for explicit truthy values (=1) — a stray =0/=false must not lift invisibility.
+  return captureProtectionEnabled({ settings: store.getSettings(), noProtectEnv: process.env.CUE_NO_PROTECT });
 }
 function applyContentProtection() {
   if (!win || win.isDestroyed()) return;
@@ -209,8 +210,9 @@ function createWindow() {
 
   // Invisibility + overlay behavior. Excluded from screen capture by default
   // (screen.contentProtection, overridable in Advanced Settings); CUE_NO_PROTECT=1 forces it
-  // off for debugging. Live-applied via applyContentProtection() on settings:set.
-  win.setContentProtection(contentProtectionEnabled());            // excluded from screen capture (best-effort)
+  // off for debugging. Live-applied via applyContentProtection() on settings:set; the create-time
+  // call goes through the same gate so both paths share one decision.
+  applyContentProtection();                                        // excluded from screen capture (best-effort)
   if (process.platform === 'darwin') {
     win.setAlwaysOnTop(true, 'screen-saver', 1);
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
